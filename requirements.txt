@@ -5,3 +5,7 @@ docx2pdf
 supabase
 PyPDF2
 uuid
+pillow
+reportlab
+pdf2image
+img2pdf

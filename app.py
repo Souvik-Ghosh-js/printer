@@ -6,6 +6,9 @@ import mimetypes
 from PyPDF2 import PdfReader, PdfWriter
 import io
 import os
+import fitz  # PyMuPDF
+import tempfile
+
 # --- Supabase Config ---
 SUPABASE_URL = "https://fgksbxrxskwchjyqxpvx.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZna3NieHJ4c2t3Y2hqeXF4cHZ4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjgxODM5MSwiZXhwIjoyMDcyMzk0MzkxfQ.l5Uujx1rpnVMGCukQtrYDP2n_RcCDMC5mlcCES8rBTc"
@@ -17,6 +20,65 @@ app = Flask(__name__)
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+def process_pdf_with_options(file_bytes, orientation, color_mode, page_range_str):
+    """
+    Process PDF with given options and return processed bytes using PyMuPDF
+    """
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    total_pages = len(doc)
+
+    # --- Parse page range ---
+    selected_indices = []
+    if page_range_str:
+        for part in page_range_str.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                start, end = part.split("-")
+                start = int(start)
+                end = int(end)
+                selected_indices.extend(range(start - 1, end))
+            else:
+                selected_indices.append(int(part) - 1)
+        selected_indices = [i for i in selected_indices if 0 <= i < total_pages]
+    else:
+        selected_indices = list(range(total_pages))
+
+    # Create a new PDF document
+    new_doc = fitz.open()
+
+    for page_num in selected_indices:
+        page = doc.load_page(page_num)
+        
+        # Create a new page with the same dimensions
+        rect = page.rect
+        new_page = new_doc.new_page(width=rect.width, height=rect.height)
+        
+        # Define transformation matrix for rotation if needed
+        mat = fitz.Matrix(1, 1)
+        if orientation == "landscape":
+            mat = mat * fitz.Matrix(0, 1, -1, 0, rect.width, 0)
+        
+        # Render the page to a pixmap with color conversion if needed
+        if color_mode == "bw":
+            # Convert to grayscale during rendering
+            pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
+        else:
+            # Keep original colors
+            pix = page.get_pixmap(matrix=mat)
+        
+        # Insert the pixmap into the new page
+        new_page.insert_image(new_page.rect, pixmap=pix)
+    
+    # Save the processed PDF to bytes
+    pdf_bytes = new_doc.tobytes()
+    new_doc.close()
+    doc.close()
+    
+    return pdf_bytes, len(selected_indices)
 
 
 # --- Preview PDF (temporary, not stored) ---
@@ -36,41 +98,18 @@ def preview_pdf():
 
     try:
         file_bytes = file.read()
-        reader = PdfReader(io.BytesIO(file_bytes))
-        total_pages = len(reader.pages)
+        
+        # Process PDF with all options
+        processed_pdf_bytes, total_pages = process_pdf_with_options(
+            file_bytes, orientation, color_mode, page_range_str
+        )
 
-        # --- Parse page range ---
-        selected_indices = []
-        if page_range_str:
-            # e.g. "1-3,5" -> [0,1,2,4]
-            for part in page_range_str.split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                if "-" in part:
-                    start, end = part.split("-")
-                    start = int(start)
-                    end = int(end)
-                    selected_indices.extend(range(start - 1, end))
-                else:
-                    selected_indices.append(int(part) - 1)
-            selected_indices = [i for i in selected_indices if 0 <= i < total_pages]
-        else:
-            selected_indices = list(range(total_pages))
-
-        writer = PdfWriter()
-        for i in selected_indices:
-            page = reader.pages[i]
-            if orientation == "landscape":
-                page.rotate(90)
-            writer.add_page(page)
-
-        buf = io.BytesIO()
-        writer.write(buf)
-        buf.seek(0)
-
-        response = send_file(buf, mimetype="application/pdf", as_attachment=False)
-        response.headers["X-Total-Pages"] = str(len(selected_indices))  # ✅ send filtered count
+        response = send_file(
+            io.BytesIO(processed_pdf_bytes),
+            mimetype="application/pdf",
+            as_attachment=False
+        )
+        response.headers["X-Total-Pages"] = str(total_pages)
         return response
 
     except Exception as e:
@@ -93,49 +132,22 @@ def upload_pdf():
     if not mime_type:
         mime_type = "application/pdf"
 
-    # --- Parse and filter pages based on user input ---
+    # Get processing options from request
     page_range_str = request.form.get("pages", "").strip()
-    filtered_pdf_bytes = file_bytes  # fallback if no filtering done
+    orientation = request.form.get("orientation", "portrait")
+    color_mode = request.form.get("color_mode", "color")
 
     try:
-        reader = PdfReader(io.BytesIO(file_bytes))
-        total_pages = len(reader.pages)
-
-        selected_indices = []
-        if page_range_str:
-            for part in page_range_str.split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                if "-" in part:
-                    start, end = map(int, part.split("-"))
-                    selected_indices.extend(range(start - 1, end))
-                else:
-                    selected_indices.append(int(part) - 1)
-            selected_indices = [i for i in selected_indices if 0 <= i < total_pages]
-        else:
-            selected_indices = list(range(total_pages))
-
-        # Get orientation selection from request
-        orientation = request.form.get("orientation", "portrait")
-
-        writer = PdfWriter()
-        for i in selected_indices:
-            page = reader.pages[i]
-            if orientation == "landscape":
-                page.rotate(90)  # <-- Rotate pages for saved file
-            writer.add_page(page)
-
-        buf = io.BytesIO()
-        writer.write(buf)
-        buf.seek(0)
-        filtered_pdf_bytes = buf.read()
-        total_pages = len(selected_indices)  # update total pages to reflect filtered file
+        # Process PDF with all options (same as preview)
+        filtered_pdf_bytes, total_pages = process_pdf_with_options(
+            file_bytes, orientation, color_mode, page_range_str
+        )
 
     except Exception as e:
-        print(f"[WARN] Page filtering/rotation failed: {e}")
-        total_pages = None
-
+        print(f"[WARN] PDF processing failed: {e}")
+        # Fallback: use original file without processing
+        filtered_pdf_bytes = file_bytes
+        total_pages = len(PdfReader(io.BytesIO(file_bytes)).pages)
 
     # --- Upload to Supabase Storage ---
     try:
@@ -146,8 +158,6 @@ def upload_pdf():
 
     # gather settings & store in DB
     sides = request.form.get("sides")
-    orientation = request.form.get("orientation")
-    color_mode = request.form.get("color_mode")
     paper_size = request.form.get("paper_size")
     price = request.form.get("price")
 
@@ -210,7 +220,7 @@ def confirm_print():
     except Exception as e:
         return jsonify({"error": "Failed to confirm print", "detail": str(e)}), 500
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))  # Use Render's assigned port
-    app.run(host='0.0.0.0', port=port)
 
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
