@@ -1,11 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <title>PDF Print Job Portal</title>
   <style>
-    /* ---------- GLOBAL THEME ---------- */
     body {
       margin: 0;
       padding: 0;
@@ -17,7 +15,6 @@
       align-items: center;
       min-height: 100vh;
     }
-
     h1 {
       margin: 30px 0 10px;
       font-size: 2rem;
@@ -26,7 +23,6 @@
       text-align: center;
       letter-spacing: 0.5px;
     }
-
     p.subtitle {
       margin-top: 0;
       font-size: 1rem;
@@ -34,8 +30,6 @@
       text-align: center;
       margin-bottom: 30px;
     }
-
-    /* ---------- MAIN CONTAINER ---------- */
     .container {
       display: flex;
       gap: 30px;
@@ -48,8 +42,6 @@
       margin-bottom: 40px;
       backdrop-filter: blur(10px);
     }
-
-    /* ---------- FORM SECTION ---------- */
     .form-section {
       flex: 1;
       max-width: 40%;
@@ -57,153 +49,60 @@
       flex-direction: column;
       gap: 15px;
     }
-
-    label {
-      font-weight: 600;
-      margin-top: 5px;
-      display: block;
+    label { font-weight: 600; margin-top: 5px; display: block; }
+    input[type="file"], select, input[type="text"] {
+      width: 100%; padding: 10px;
+      border: 1px solid #ddd; border-radius: 8px;
+      font-size: 14px; margin-top: 5px;
+      background: #fafafa; transition: border 0.2s;
     }
-
-    input[type="file"],
-    select,
-    input[type="text"] {
-      width: 100%;
-      padding: 10px;
-      border: 1px solid #ddd;
-      border-radius: 8px;
-      font-size: 14px;
-      margin-top: 5px;
-      background: #fafafa;
-      transition: border 0.2s;
-    }
-
-    input[type="file"]:hover,
-    select:hover,
-    input[type="text"]:hover {
+    input[type="file"]:hover, select:hover, input[type="text"]:hover {
       border-color: #007bff;
     }
-
     .controls-row {
-      display: flex;
-      gap: 10px;
-      margin-top: 10px;
+      display: flex; gap: 10px; margin-top: 10px;
     }
-
     button {
-      flex: 1;
-      padding: 10px 12px;
-      font-size: 14px;
-      font-weight: 600;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
+      flex: 1; padding: 10px 12px; font-size: 14px;
+      font-weight: 600; border: none;
+      border-radius: 8px; cursor: pointer;
       transition: all 0.25s ease-in-out;
     }
-
-    #preview-btn {
-      background: #6c63ff;
-      color: white;
-    }
-
-    #upload-btn {
-      background: #4cafef;
-      color: white;
-    }
-
-    #print-btn {
-      background: #27ae60;
-      color: white;
-    }
-
-    button:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-      opacity: 0.95;
-    }
-
-    .error-text {
-      color: #e74c3c;
-      font-size: 13px;
-      display: none;
-    }
-
+    #preview-btn { background: #6c63ff; color: white; }
+    #upload-btn { background: #4cafef; color: white; }
+    #print-btn { background: #27ae60; color: white; }
+    button:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); opacity: 0.95; }
+    .error-text { color: #e74c3c; font-size: 13px; display: none; }
     .info-box {
-      font-size: 13px;
-      color: #555;
-      background: #f7faff;
-      border: 1px dashed #b3c7ff;
-      padding: 8px;
-      border-radius: 6px;
-      margin-top: 8px;
+      font-size: 13px; color: #555; background: #f7faff;
+      border: 1px dashed #b3c7ff; padding: 8px;
+      border-radius: 6px; margin-top: 8px;
     }
-
-    h3 {
-      margin-top: 15px;
-      font-size: 1rem;
-      font-weight: 600;
-      color: #2c3e50;
-    }
-
-    /* ---------- PREVIEW SECTION ---------- */
+    h3 { margin-top: 15px; font-size: 1rem; font-weight: 600; color: #2c3e50; }
     .preview-section {
-      flex: 1;
-      background: #fff;
-      border-radius: 12px;
-      border: 1px solid #ddd;
-      padding: 15px;
-      display: flex;
-      flex-direction: column;
-      max-height: 750px;
-      box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.02);
+      flex: 1; background: #fff; border-radius: 12px;
+      border: 1px solid #ddd; padding: 15px;
+      display: flex; flex-direction: column;
+      max-height: 750px; box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.02);
     }
-
-    .preview-section h3 {
-      margin-bottom: 10px;
-      text-align: center;
-      color: #2c3e50;
-    }
-
+    .preview-section h3 { margin-bottom: 10px; text-align: center; color: #2c3e50; }
     #preview-box {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #fafafa;
-      border-radius: 8px;
-      overflow: hidden;
+      flex: 1; display: flex; align-items: center;
+      justify-content: center; background: #fafafa;
+      border-radius: 8px; overflow: hidden;
     }
-
-    embed {
-      width: 100%;
-      height: 100%;
-      border: none;
+    iframe {
+      width: 100%; height: 100%; border: none;
     }
-
-    /* ---------- LOADER ---------- */
-    #loader {
-      text-align: center;
-      font-size: 14px;
-      color: #555;
-    }
-
+    #loader { text-align: center; font-size: 14px; color: #555; }
     .spinner {
-      border: 4px solid #f3f3f3;
-      border-top: 4px solid #007BFF;
-      border-radius: 50%;
-      width: 36px;
-      height: 36px;
-      animation: spin 1s linear infinite;
-      margin: 10px auto;
+      border: 4px solid #f3f3f3; border-top: 4px solid #007BFF;
+      border-radius: 50%; width: 36px; height: 36px;
+      animation: spin 1s linear infinite; margin: 10px auto;
     }
-
-    @keyframes spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
-
 <body>
   <h1>Print With Ease</h1>
   <p class="subtitle">Upload, preview, and confirm your documents with professional-grade accuracy</p>
@@ -214,49 +113,40 @@
       <form id="upload-form" enctype="multipart/form-data">
         <label>Choose PDF</label>
         <input type="file" name="file" accept="application/pdf" required>
-
         <label>Print sides</label>
         <select name="sides">
           <option value="single">One-sided</option>
           <option value="double">Two-sided</option>
         </select>
-
         <label>Orientation</label>
         <select name="orientation">
           <option value="portrait">Portrait</option>
           <option value="landscape">Landscape</option>
         </select>
-
         <label>Color</label>
         <select name="color_mode">
           <option value="bw">Black & White</option>
           <option value="color">Color</option>
         </select>
-
         <label>Paper size</label>
         <select name="paper_size">
           <option value="A4">A4</option>
           <option value="A3">A3</option>
           <option value="Letter">Letter</option>
         </select>
-
         <label>Page range</label>
         <input type="text" name="pages" id="pages" placeholder="e.g. 1-3,5 or 2,4,6">
         <div id="page-error" class="error-text">Invalid page range (use numbers and ranges, e.g. 1,3,5-7)</div>
-
         <div class="info-box">
           Preview your selected settings before uploading. After upload, total page count will be displayed.
         </div>
       </form>
-
       <h3>Total Pages: <span id="total-pages">-</span></h3>
-
       <div class="controls-row">
         <button id="preview-btn">Preview</button>
         <button id="upload-btn" disabled>Upload & Create Job</button>
         <button id="print-btn" disabled>Confirm Print</button>
       </div>
-
       <div id="upload-result" class="info-box"></div>
     </div>
 
@@ -269,13 +159,9 @@
     </div>
   </div>
 
-  <!-- Your existing JS logic -->
   <script>
     (function () {
-      let selectedFile = null;
-      let jobId = null;
-      let totalPages = 0;
-
+      let selectedFile = null, jobId = null, totalPages = 0;
       const fileInput = document.querySelector('input[name="file"]');
       const previewBtn = document.getElementById("preview-btn");
       const uploadBtn = document.getElementById("upload-btn");
@@ -323,9 +209,7 @@
       });
 
       previewBtn.addEventListener("click", async () => {
-        if (!selectedFile) {
-          return alert("Please choose a PDF file first.");
-        }
+        if (!selectedFile) return alert("Please choose a PDF file first.");
         const form = document.getElementById("upload-form");
         const fd = new FormData();
         fd.append("file", selectedFile);
@@ -348,10 +232,10 @@
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
           previewBox.innerHTML = "";
-          const embed = document.createElement("embed");
-          embed.src = url;
-          embed.type = "application/pdf";
-          previewBox.appendChild(embed);
+          const iframe = document.createElement("iframe");
+          iframe.src = url;
+          iframe.setAttribute("type", "application/pdf");
+          previewBox.appendChild(iframe);
 
           uploadBtn.disabled = false;
           pageError.style.display = "none";
@@ -431,9 +315,7 @@
           alert("Error confirming print: " + err.message);
         }
       });
-
     })();
   </script>
 </body>
-
 </html>
