@@ -5,7 +5,7 @@ import uuid
 import mimetypes
 from PyPDF2 import PdfReader, PdfWriter
 import io
-
+import os
 # --- Supabase Config ---
 SUPABASE_URL = "https://fgksbxrxskwchjyqxpvx.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZna3NieHJ4c2t3Y2hqeXF4cHZ4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjgxODM5MSwiZXhwIjoyMDcyMzk0MzkxfQ.l5Uujx1rpnVMGCukQtrYDP2n_RcCDMC5mlcCES8rBTc"
@@ -210,7 +210,7 @@ def confirm_print():
     except Exception as e:
         return jsonify({"error": "Failed to confirm print", "detail": str(e)}), 500
 
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))  # Use Render's assigned port
+    app.run(host='0.0.0.0', port=port)
 
-if __name__ == "__main__":
-    print("[SERVER] Running Flask at http://127.0.0.1:5000")
-    app.run(debug=True)
