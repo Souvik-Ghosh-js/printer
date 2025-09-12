@@ -191,11 +191,22 @@
       min-height: 300px;
     }
 
-    embed, iframe {
+    embed, iframe, canvas {
       width: 100%;
       height: 100%;
       border: none;
       min-height: 500px;
+    }
+
+    .pdf-viewer {
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+    }
+
+    .pdf-page {
+      margin-bottom: 20px;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     }
 
     .mobile-pdf-alert {
@@ -206,6 +217,18 @@
       margin-bottom: 10px;
       font-size: 14px;
       text-align: center;
+    }
+
+    .pdf-controls {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin: 10px 0;
+    }
+
+    .pdf-controls button {
+      min-width: 80px;
+      padding: 8px 12px;
     }
 
     /* ---------- LOADER ---------- */
@@ -231,6 +254,8 @@
       }
     }
   </style>
+  <!-- PDF.js library for Android devices -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
 </head>
 
 <body>
@@ -293,10 +318,15 @@
     <div class="preview-section">
       <h3>Preview</h3>
       <div id="android-alert" class="mobile-pdf-alert" style="display: none;">
-        Android device detected: Using Google Docs viewer for PDF preview
+        Android device detected: Using PDF.js for PDF preview
       </div>
       <div id="preview-box">
         <p style="color:#888;">No preview yet.</p>
+      </div>
+      <div id="pdf-controls" class="pdf-controls" style="display: none;">
+        <button id="prev-page">Previous</button>
+        <span id="page-num">Page: 1</span>
+        <button id="next-page">Next</button>
       </div>
     </div>
   </div>
@@ -316,6 +346,8 @@
       let selectedFile = null;
       let jobId = null;
       let totalPages = 0;
+      let currentPdf = null;
+      let currentPageNum = 1;
 
       const fileInput = document.querySelector('input[name="file"]');
       const previewBtn = document.getElementById("preview-btn");
@@ -326,12 +358,21 @@
       const pagesInput = document.getElementById("pages");
       const pageError = document.getElementById("page-error");
       const uploadResult = document.getElementById("upload-result");
+      const pdfControls = document.getElementById("pdf-controls");
+      const prevPageBtn = document.getElementById("prev-page");
+      const nextPageBtn = document.getElementById("next-page");
+      const pageNumSpan = document.getElementById("page-num");
+
+      // Set up PDF.js worker
+      pdfjsLib = window['pdfjs-dist/build/pdf'];
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
       fileInput.addEventListener("change", (e) => {
         selectedFile = e.target.files[0] || null;
         uploadBtn.disabled = true;
         printBtn.disabled = true;
         uploadResult.textContent = "";
+        pdfControls.style.display = 'none';
       });
 
       function isValidPageRange(str, maxPage) {
@@ -363,31 +404,85 @@
         pageError.style.display = ok ? "none" : "block";
       });
 
+      // Function to render PDF page using PDF.js
+      function renderPage(pdf, pageNum) {
+        pdf.getPage(pageNum).then(function(page) {
+          const viewport = page.getViewport({scale: 1.5});
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+          
+          const renderContext = {
+            canvasContext: ctx,
+            viewport: viewport
+          };
+          
+          previewBox.innerHTML = '';
+          previewBox.appendChild(canvas);
+          
+          page.render(renderContext).promise.then(function() {
+            pageNumSpan.textContent = `Page: ${pageNum} of ${totalPages}`;
+            prevPageBtn.disabled = pageNum <= 1;
+            nextPageBtn.disabled = pageNum >= totalPages;
+          });
+        });
+      }
+
+      // For Android devices - render PDF using PDF.js
+      function renderPdfWithPdfJs(file) {
+        const fileReader = new FileReader();
+        
+        fileReader.onload = function() {
+          const typedarray = new Uint8Array(this.result);
+          
+          pdfjsLib.getDocument(typedarray).promise.then(function(pdf) {
+            currentPdf = pdf;
+            totalPages = pdf.numPages;
+            totalPagesEl.textContent = totalPages;
+            currentPageNum = 1;
+            
+            // Show page controls
+            pdfControls.style.display = 'flex';
+            
+            // Render first page
+            renderPage(pdf, 1);
+            
+            uploadBtn.disabled = false;
+            pageError.style.display = "none";
+          }).catch(function(error) {
+            console.error('Error loading PDF:', error);
+            previewBox.innerHTML = `<p style="color:red">Failed to load PDF: ${error.message}</p>`;
+          });
+        };
+        
+        fileReader.readAsArrayBuffer(file);
+      }
+
+      // Page navigation
+      prevPageBtn.addEventListener('click', function() {
+        if (currentPdf && currentPageNum > 1) {
+          currentPageNum--;
+          renderPage(currentPdf, currentPageNum);
+        }
+      });
+
+      nextPageBtn.addEventListener('click', function() {
+        if (currentPdf && currentPageNum < totalPages) {
+          currentPageNum++;
+          renderPage(currentPdf, currentPageNum);
+        }
+      });
+
       previewBtn.addEventListener("click", async () => {
         if (!selectedFile) {
           return alert("Please choose a PDF file first.");
         }
         
-        // For Android devices, use Google Docs viewer
+        // For Android devices, use PDF.js
         if (isAndroidDevice) {
-          const fileURL = URL.createObjectURL(selectedFile);
-          const googleDocsViewerURL = `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(fileURL)}`;
-          
-          previewBox.innerHTML = "";
-          const iframe = document.createElement("iframe");
-          iframe.src = googleDocsViewerURL;
-          iframe.style.width = "100%";
-          iframe.style.height = "100%";
-          iframe.style.minHeight = "500px";
-          previewBox.appendChild(iframe);
-          
-          // Estimate page count (this is a rough approximation)
-          // In a real implementation, you'd want to use a PDF.js based solution
-          const estimatedPages = Math.max(1, Math.round(selectedFile.size / 50000));
-          totalPages = estimatedPages;
-          totalPagesEl.textContent = totalPages;
-          
-          uploadBtn.disabled = false;
+          previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Loading PDF...</p></div>`;
+          setTimeout(() => renderPdfWithPdfJs(selectedFile), 100);
           return;
         }
         
@@ -421,6 +516,7 @@
 
           uploadBtn.disabled = false;
           pageError.style.display = "none";
+          pdfControls.style.display = 'none';
         } catch (err) {
           console.error("Preview error:", err);
           previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.message}</p>`;
