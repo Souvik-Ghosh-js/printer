@@ -70,7 +70,7 @@ def preview_pdf():
         buf.seek(0)
 
         response = send_file(buf, mimetype="application/pdf", as_attachment=False)
-        response.headers["X-Total-Pages"] = str(total_pages)
+        response.headers["X-Total-Pages"] = str(len(selected_indices))  # ✅ send filtered count
         return response
 
     except Exception as e:
