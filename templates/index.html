@@ -191,7 +191,9 @@
       min-height: 300px;
     }
 
-    embed, iframe, canvas {
+    embed,
+    iframe,
+    canvas {
       width: 100%;
       height: 100%;
       border: none;
@@ -339,303 +341,311 @@
   </div>
 
   <script>
-  (function () {
-    // Detect mobile devices (Android and iOS)
-    function isMobile() {
-      return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    }
-    
-    const isMobileDevice = isMobile();
-    if (isMobileDevice) {
-      document.getElementById('mobile-alert').style.display = 'block';
-    }
+    (function () {
+      // Detect mobile devices (Android and iOS)
+      function isMobile() {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      }
 
-    let selectedFile = null;
-    let jobId = null;
-    let totalPages = 0;
-    let currentPdf = null;
-    let currentPageNum = 1;
-    let pdfRendering = false;
-    let pdfRenderQueue = null;
+      const isMobileDevice = isMobile();
+      if (isMobileDevice) {
+        document.getElementById('mobile-alert').style.display = 'block';
+      }
 
-    const fileInput = document.querySelector('input[name="file"]');
-    const previewBtn = document.getElementById("preview-btn");
-    const uploadBtn = document.getElementById("upload-btn");
-    const printBtn = document.getElementById("print-btn");
-    const previewBox = document.getElementById("preview-box");
-    const totalPagesEl = document.getElementById("total-pages");
-    const pagesInput = document.getElementById("pages");
-    const pageError = document.getElementById("page-error");
-    const uploadResult = document.getElementById("upload-result");
-    const pdfControls = document.getElementById("pdf-controls");
-    const prevPageBtn = document.getElementById("prev-page");
-    const nextPageBtn = document.getElementById("next-page");
-    const pageNumSpan = document.getElementById("page-num");
+      let selectedFile = null;
+      let jobId = null;
+      let totalPages = 0;
+      let currentPdf = null;
+      let currentPageNum = 1;
+      let pdfRendering = false;
+      let pdfRenderQueue = null;
 
-    // Set up PDF.js worker
-    pdfjsLib = window['pdfjs-dist/build/pdf'];
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+      const fileInput = document.querySelector('input[name="file"]');
+      const previewBtn = document.getElementById("preview-btn");
+      const uploadBtn = document.getElementById("upload-btn");
+      const printBtn = document.getElementById("print-btn");
+      const previewBox = document.getElementById("preview-box");
+      const totalPagesEl = document.getElementById("total-pages");
+      const pagesInput = document.getElementById("pages");
+      const pageError = document.getElementById("page-error");
+      const uploadResult = document.getElementById("upload-result");
+      const pdfControls = document.getElementById("pdf-controls");
+      const prevPageBtn = document.getElementById("prev-page");
+      const nextPageBtn = document.getElementById("next-page");
+      const pageNumSpan = document.getElementById("page-num");
 
-    fileInput.addEventListener("change", (e) => {
-      selectedFile = e.target.files[0] || null;
-      uploadBtn.disabled = true;
-      printBtn.disabled = true;
-      uploadResult.textContent = "";
-      pdfControls.style.display = 'none';
-      
-      // Reset PDF state
-      currentPdf = null;
-      currentPageNum = 1;
-    });
+      // Set up PDF.js worker
+      pdfjsLib = window['pdfjs-dist/build/pdf'];
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
-    function isValidPageRange(str, maxPage) {
-      if (!str || !str.trim()) return true;
-      if (!maxPage || maxPage <= 0) return true;
-      const parts = str.split(",");
-      for (let raw of parts) {
-        const part = raw.trim();
-        if (!part) continue;
-        if (part.includes("-")) {
-          const bounds = part.split("-").map(s => s.trim());
-          if (bounds.length !== 2) return false;
-          const a = Number(bounds[0]);
-          const b = Number(bounds[1]);
-          if (!Number.isInteger(a) || !Number.isInteger(b)) return false;
-          if (a < 1 || b < 1 || a > b || b > maxPage) return false;
-        } else {
-          const n = Number(part);
-          if (!Number.isInteger(n)) return false;
-          if (n < 1 || n > maxPage) return false;
+      fileInput.addEventListener("change", (e) => {
+        selectedFile = e.target.files[0] || null;
+        uploadBtn.disabled = true;
+        printBtn.disabled = true;
+        uploadResult.textContent = "";
+        pdfControls.style.display = 'none';
+
+        // Reset PDF state
+        currentPdf = null;
+        currentPageNum = 1;
+      });
+
+      function isValidPageRange(str, maxPage) {
+        if (!str || !str.trim()) return true;
+        if (!maxPage || maxPage <= 0) return true;
+        const parts = str.split(",");
+        for (let raw of parts) {
+          const part = raw.trim();
+          if (!part) continue;
+          if (part.includes("-")) {
+            const bounds = part.split("-").map(s => s.trim());
+            if (bounds.length !== 2) return false;
+            const a = Number(bounds[0]);
+            const b = Number(bounds[1]);
+            if (!Number.isInteger(a) || !Number.isInteger(b)) return false;
+            if (a < 1 || b < 1 || a > b || b > maxPage) return false;
+          } else {
+            const n = Number(part);
+            if (!Number.isInteger(n)) return false;
+            if (n < 1 || n > maxPage) return false;
+          }
+        }
+        return true;
+      }
+
+      pagesInput.addEventListener("input", () => {
+        const val = pagesInput.value.trim();
+        const ok = isValidPageRange(val, totalPages);
+        pageError.style.display = ok ? "none" : "block";
+      });
+
+      // Function to render PDF page using PDF.js
+      function renderPage(pageNum) {
+        if (pdfRendering || !currentPdf) return;
+
+        pdfRendering = true;
+        currentPageNum = pageNum;
+
+        currentPdf.getPage(pageNum).then(function (page) {
+          const viewport = page.getViewport({ scale: 1.5 });
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+
+          const renderContext = {
+            canvasContext: ctx,
+            viewport: viewport
+          };
+
+          previewBox.innerHTML = '';
+          previewBox.appendChild(canvas);
+
+          const renderTask = page.render(renderContext);
+          renderTask.promise.then(function () {
+            pageNumSpan.textContent = `Page: ${pageNum} of ${totalPages}`;
+            prevPageBtn.disabled = pageNum <= 1;
+            nextPageBtn.disabled = pageNum >= totalPages;
+            pdfRendering = false;
+
+            // Process render queue if exists
+            if (pdfRenderQueue !== null) {
+              const nextPage = pdfRenderQueue;
+              pdfRenderQueue = null;
+              renderPage(nextPage);
+            }
+          });
+        }).catch(function (error) {
+          console.error('Error rendering page:', error);
+          pdfRendering = false;
+          pdfRenderQueue = null;
+        });
+      }
+
+      // For mobile devices - render PDF using PDF.js
+      async function renderPdfWithPdfJs(file) {
+        try {
+          const form = document.getElementById("upload-form");
+          const fd = new FormData();
+          fd.append("file", file);
+          fd.append("orientation", form.orientation.value || "portrait");
+          fd.append("color_mode", form.color_mode.value || "color");
+          fd.append("pages", pagesInput.value.trim());
+
+          // Send to /preview to get processed PDF
+          const res = await fetch("/preview", { method: "POST", body: fd });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: "unknown" }));
+            previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'server error'}</p>`;
+            return;
+          }
+
+          const pagesHeader = res.headers.get("X-Total-Pages");
+          totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
+          totalPagesEl.textContent = totalPages || "-";
+
+          const arrayBuffer = await res.arrayBuffer();
+          const typedarray = new Uint8Array(arrayBuffer);
+
+          pdfjsLib.getDocument(typedarray).promise.then(function (pdf) {
+            currentPdf = pdf;
+            currentPageNum = 1;
+            pdfControls.style.display = 'flex';
+            renderPage(1);
+            uploadBtn.disabled = false;
+          });
+        } catch (error) {
+          console.error("Error rendering PDF:", error);
+          previewBox.innerHTML = `<p style="color:red">Failed to load preview: ${error.message}</p>`;
         }
       }
-      return true;
-    }
 
-    pagesInput.addEventListener("input", () => {
-      const val = pagesInput.value.trim();
-      const ok = isValidPageRange(val, totalPages);
-      pageError.style.display = ok ? "none" : "block";
-    });
-
-    // Function to render PDF page using PDF.js
-    function renderPage(pageNum) {
-      if (pdfRendering || !currentPdf) return;
-      
-      pdfRendering = true;
-      currentPageNum = pageNum;
-      
-      currentPdf.getPage(pageNum).then(function(page) {
-        const viewport = page.getViewport({scale: 1.5});
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
-        
-        const renderContext = {
-          canvasContext: ctx,
-          viewport: viewport
-        };
-        
-        previewBox.innerHTML = '';
-        previewBox.appendChild(canvas);
-        
-        const renderTask = page.render(renderContext);
-        renderTask.promise.then(function() {
-          pageNumSpan.textContent = `Page: ${pageNum} of ${totalPages}`;
-          prevPageBtn.disabled = pageNum <= 1;
-          nextPageBtn.disabled = pageNum >= totalPages;
-          pdfRendering = false;
-          
-          // Process render queue if exists
-          if (pdfRenderQueue !== null) {
-            const nextPage = pdfRenderQueue;
-            pdfRenderQueue = null;
+      // Page navigation
+      prevPageBtn.addEventListener('click', function () {
+        if (currentPdf && currentPageNum > 1) {
+          const nextPage = currentPageNum - 1;
+          if (pdfRendering) {
+            pdfRenderQueue = nextPage;
+          } else {
             renderPage(nextPage);
           }
-        });
-      }).catch(function(error) {
-        console.error('Error rendering page:', error);
-        pdfRendering = false;
-        pdfRenderQueue = null;
+        }
       });
-    }
 
-    // For mobile devices - render PDF using PDF.js
-    function renderPdfWithPdfJs(file) {
-      const fileReader = new FileReader();
-      
-      fileReader.onload = function() {
-        const typedarray = new Uint8Array(this.result);
-        
-        pdfjsLib.getDocument(typedarray).promise.then(function(pdf) {
-          currentPdf = pdf;
-          totalPages = pdf.numPages;
-          totalPagesEl.textContent = totalPages;
-          currentPageNum = 1;
-          
-          // Show page controls
-          pdfControls.style.display = 'flex';
-          
-          // Render first page
-          renderPage(1);
-          
-          uploadBtn.disabled = false;
-          pageError.style.display = "none";
-        }).catch(function(error) {
-          console.error('Error loading PDF:', error);
-          previewBox.innerHTML = `<p style="color:red">Failed to load PDF: ${error.message}</p>`;
-        });
-      };
-      
-      fileReader.readAsArrayBuffer(file);
-    }
-
-    // Page navigation
-    prevPageBtn.addEventListener('click', function() {
-      if (currentPdf && currentPageNum > 1) {
-        const nextPage = currentPageNum - 1;
-        if (pdfRendering) {
-          pdfRenderQueue = nextPage;
-        } else {
-          renderPage(nextPage);
+      nextPageBtn.addEventListener('click', function () {
+        if (currentPdf && currentPageNum < totalPages) {
+          const nextPage = currentPageNum + 1;
+          if (pdfRendering) {
+            pdfRenderQueue = nextPage;
+          } else {
+            renderPage(nextPage);
+          }
         }
-      }
-    });
+      });
 
-    nextPageBtn.addEventListener('click', function() {
-      if (currentPdf && currentPageNum < totalPages) {
-        const nextPage = currentPageNum + 1;
-        if (pdfRendering) {
-          pdfRenderQueue = nextPage;
-        } else {
-          renderPage(nextPage);
+      previewBtn.addEventListener("click", async () => {
+        if (!selectedFile) {
+          return alert("Please choose a PDF file first.");
         }
-      }
-    });
 
-    previewBtn.addEventListener("click", async () => {
-      if (!selectedFile) {
-        return alert("Please choose a PDF file first.");
-      }
-      
-      // For mobile devices, use PDF.js
-      if (isMobileDevice) {
-        previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Loading PDF...</p></div>`;
-        setTimeout(() => renderPdfWithPdfJs(selectedFile), 100);
-        return;
-      }
-      
-      // Original preview code for non-mobile devices
-      const form = document.getElementById("upload-form");
-      const fd = new FormData();
-      fd.append("file", selectedFile);
-      fd.append("orientation", form.orientation.value || "portrait");
-      fd.append("color_mode", form.color_mode.value || "color");
-      fd.append("pages", pagesInput.value.trim());
-
-      previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Generating preview...</p></div>`;
-      try {
-        const res = await fetch("/preview", { method: "POST", body: fd });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: "unknown" }));
-          previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'server error'}</p>`;
+        // For mobile devices, use PDF.js
+        if (isMobileDevice) {
+          previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Loading PDF...</p></div>`;
+          setTimeout(() => renderPdfWithPdfJs(selectedFile), 100);
           return;
         }
-        const pagesHeader = res.headers.get("X-Total-Pages");
-        totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
-        totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
 
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        previewBox.innerHTML = "";
-        const embed = document.createElement("embed");
-        embed.src = url;
-        embed.type = "application/pdf";
-        previewBox.appendChild(embed);
+        // Original preview code for non-mobile devices
+        const form = document.getElementById("upload-form");
+        const fd = new FormData();
+        fd.append("file", selectedFile);
+        fd.append("orientation", form.orientation.value || "portrait");
+        fd.append("color_mode", form.color_mode.value || "color");
+        fd.append("pages", pagesInput.value.trim());
 
-        uploadBtn.disabled = false;
-        pageError.style.display = "none";
-        pdfControls.style.display = 'none';
-      } catch (err) {
-        console.error("Preview error:", err);
-        previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.message}</p>`;
-      }
-    });
+        previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Generating preview...</p></div>`;
+        try {
+          const res = await fetch("/preview", { method: "POST", body: fd });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: "unknown" }));
+            previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'server error'}</p>`;
+            return;
+          }
+          const pagesHeader = res.headers.get("X-Total-Pages");
+          totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
+          totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
 
-    uploadBtn.addEventListener("click", async () => {
-      if (!selectedFile) return alert("No file selected.");
-      const pagesVal = pagesInput.value.trim();
-      if (!isValidPageRange(pagesVal, totalPages)) {
-        return alert("Invalid page range. Please fix it before uploading.");
-      }
-      
-      const form = document.getElementById("upload-form");
-      const fd = new FormData();
-      fd.append("file", selectedFile);
-      fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
-      fd.append("sides", form.sides.value);
-      fd.append("orientation", form.orientation.value);
-      fd.append("color_mode", form.color_mode.value);
-      fd.append("paper_size", form.paper_size.value);
-      fd.append("pages", pagesVal);
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          previewBox.innerHTML = "";
+          const embed = document.createElement("embed");
+          embed.src = url;
+          embed.type = "application/pdf";
+          previewBox.appendChild(embed);
 
-      uploadResult.textContent = "Uploading...";
-      uploadBtn.disabled = true;
-      try {
-        const res = await fetch("/upload", { method: "POST", body: fd });
-        const data = await res.json();
-        if (res.ok && (data.job_id || data.job)) {
-          jobId = data.job_id || (data.job && data.job[0] && data.job[0].id) || null;
-          totalPages = data.total_pages || totalPages || 0;
-          totalPagesEl.textContent = totalPages || "-";
-          uploadResult.textContent = `Upload successful. Job ID: ${jobId || "n/a"}. Total pages: ${totalPages || "unknown"}`;
-          printBtn.disabled = false;
-        } else {
-          uploadResult.textContent = `Upload failed: ${data.error || JSON.stringify(data)}`;
+          uploadBtn.disabled = false;
+          pageError.style.display = "none";
+          pdfControls.style.display = 'none';
+        } catch (err) {
+          console.error("Preview error:", err);
+          previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.message}</p>`;
+        }
+      });
+
+      uploadBtn.addEventListener("click", async () => {
+        if (!selectedFile) return alert("No file selected.");
+        const pagesVal = pagesInput.value.trim();
+        if (!isValidPageRange(pagesVal, totalPages)) {
+          return alert("Invalid page range. Please fix it before uploading.");
+        }
+
+        const form = document.getElementById("upload-form");
+        const fd = new FormData();
+        fd.append("file", selectedFile);
+        fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
+        fd.append("sides", form.sides.value);
+        fd.append("orientation", form.orientation.value);
+        fd.append("color_mode", form.color_mode.value);
+        fd.append("paper_size", form.paper_size.value);
+        fd.append("pages", pagesVal);
+
+        uploadResult.textContent = "Uploading...";
+        uploadBtn.disabled = true;
+        try {
+          const res = await fetch("/upload", { method: "POST", body: fd });
+          const data = await res.json();
+          if (res.ok && (data.job_id || data.job)) {
+            jobId = data.job_id || (data.job && data.job[0] && data.job[0].id) || null;
+            totalPages = data.total_pages || totalPages || 0;
+            totalPagesEl.textContent = totalPages || "-";
+            uploadResult.textContent = `Upload successful. Job ID: ${jobId || "n/a"}. Total pages: ${totalPages || "unknown"}`;
+            printBtn.disabled = false;
+          } else {
+            uploadResult.textContent = `Upload failed: ${data.error || JSON.stringify(data)}`;
+            uploadBtn.disabled = false;
+          }
+        } catch (err) {
+          console.error("Upload error:", err);
+          uploadResult.textContent = `Upload error: ${err.message}`;
           uploadBtn.disabled = false;
         }
-      } catch (err) {
-        console.error("Upload error:", err);
-        uploadResult.textContent = `Upload error: ${err.message}`;
-        uploadBtn.disabled = false;
-      }
-    });
+      });
 
-    printBtn.addEventListener("click", async () => {
-      if (!jobId) return alert("Please upload and create a job first.");
-      const form = document.getElementById("upload-form");
-      const payload = {
-        job_id: jobId,
-        sides: form.sides.value,
-        orientation: form.orientation.value,
-        color_mode: form.color_mode.value,
-        paper_size: form.paper_size.value,
-        pages: pagesInput.value.trim(),
-        total_pages: totalPages,
-        price: 0
-      };
-      try {
-        const res = await fetch("/print", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (res.ok && data.status === "confirmed") {
-          alert("Print order confirmed!");
-          printBtn.disabled = true;
-          uploadBtn.disabled = true;
-        } else {
-          alert("Failed to confirm print: " + (data.error || JSON.stringify(data)));
+      printBtn.addEventListener("click", async () => {
+        if (!jobId) return alert("Please upload and create a job first.");
+        const form = document.getElementById("upload-form");
+        const payload = {
+          job_id: jobId,
+          sides: form.sides.value,
+          orientation: form.orientation.value,
+          color_mode: form.color_mode.value,
+          paper_size: form.paper_size.value,
+          pages: pagesInput.value.trim(),
+          total_pages: totalPages,
+          price: 0
+        };
+        try {
+          const res = await fetch("/print", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (res.ok && data.status === "confirmed") {
+            alert("Print order confirmed!");
+            printBtn.disabled = true;
+            uploadBtn.disabled = true;
+          } else {
+            alert("Failed to confirm print: " + (data.error || JSON.stringify(data)));
+          }
+        } catch (err) {
+          console.error("Confirm print error:", err);
+          alert("Error confirming print: " + err.message);
         }
-      } catch (err) {
-        console.error("Confirm print error:", err);
-        alert("Error confirming print: " + err.message);
-      }
-    });
+      });
 
-  })();
-</script>
+    })();
+  </script>
 </body>
 
 </html>
