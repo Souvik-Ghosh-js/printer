@@ -1,0 +1,81 @@
+body {
+  font-family: Arial, sans-serif;
+  margin: 0;
+  padding: 20px;
+  background: #f9f9f9;
+}
+
+h2, h3 {
+  margin-bottom: 10px;
+}
+
+form label {
+  display: block;
+  margin-top: 10px;
+  font-weight: bold;
+}
+
+input[type="file"],
+select,
+input[type="text"],
+button {
+  margin-top: 5px;
+  padding: 6px;
+  font-size: 14px;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background-color: #007BFF;
+  color: white;
+  border-radius: 4px;
+  transition: 0.2s;
+}
+
+button:hover {
+  background-color: #0056b3;
+}
+
+.error-text {
+  color: red;
+  font-size: 13px;
+  display: none;
+  margin-top: 5px;
+}
+
+.container {
+  display: flex;
+  gap: 20px;
+}
+
+/* Left side (form) */
+.form-section {
+  flex: 1;
+  max-width: 40%;
+}
+
+/* Right side (preview) */
+.preview-section {
+  flex: 1;
+  background: white;
+  border: 1px solid #ddd;
+  padding: 10px;
+  overflow-y: auto;
+  max-height: 90vh;
+}
+
+.preview-section img {
+  display: block;
+  width: 100%;      /* Fit the box width */
+  height: auto;     /* Keep aspect ratio */
+  margin-bottom: 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+/* Rotate landscape previews */
+.landscape img {
+  transform: rotate(90deg);
+  transform-origin: center center;
+}

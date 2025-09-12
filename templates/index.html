@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>PDF Print Job Portal</title>
+  <style>
+    /* ---------- GLOBAL THEME ---------- */
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(to right, #fdfbfb, #ebedee);
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    h1 {
+      margin: 30px 0 10px;
+      font-size: 2rem;
+      font-weight: 600;
+      color: #2c3e50;
+      text-align: center;
+      letter-spacing: 0.5px;
+    }
+
+    p.subtitle {
+      margin-top: 0;
+      font-size: 1rem;
+      color: #666;
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    /* ---------- MAIN CONTAINER ---------- */
+    .container {
+      display: flex;
+      gap: 30px;
+      width: 90%;
+      max-width: 1200px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+      padding: 30px;
+      margin-bottom: 40px;
+      backdrop-filter: blur(10px);
+    }
+
+    /* ---------- FORM SECTION ---------- */
+    .form-section {
+      flex: 1;
+      max-width: 40%;
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+
+    label {
+      font-weight: 600;
+      margin-top: 5px;
+      display: block;
+    }
+
+    input[type="file"],
+    select,
+    input[type="text"] {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-top: 5px;
+      background: #fafafa;
+      transition: border 0.2s;
+    }
+
+    input[type="file"]:hover,
+    select:hover,
+    input[type="text"]:hover {
+      border-color: #007bff;
+    }
+
+    .controls-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    button {
+      flex: 1;
+      padding: 10px 12px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.25s ease-in-out;
+    }
+
+    #preview-btn {
+      background: #6c63ff;
+      color: white;
+    }
+
+    #upload-btn {
+      background: #4cafef;
+      color: white;
+    }
+
+    #print-btn {
+      background: #27ae60;
+      color: white;
+    }
+
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+      opacity: 0.95;
+    }
+
+    .error-text {
+      color: #e74c3c;
+      font-size: 13px;
+      display: none;
+    }
+
+    .info-box {
+      font-size: 13px;
+      color: #555;
+      background: #f7faff;
+      border: 1px dashed #b3c7ff;
+      padding: 8px;
+      border-radius: 6px;
+      margin-top: 8px;
+    }
+
+    h3 {
+      margin-top: 15px;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+
+    /* ---------- PREVIEW SECTION ---------- */
+    .preview-section {
+      flex: 1;
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid #ddd;
+      padding: 15px;
+      display: flex;
+      flex-direction: column;
+      max-height: 750px;
+      box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.02);
+    }
+
+    .preview-section h3 {
+      margin-bottom: 10px;
+      text-align: center;
+      color: #2c3e50;
+    }
+
+    #preview-box {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #fafafa;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    embed {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+
+    /* ---------- LOADER ---------- */
+    #loader {
+      text-align: center;
+      font-size: 14px;
+      color: #555;
+    }
+
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #007BFF;
+      border-radius: 50%;
+      width: 36px;
+      height: 36px;
+      animation: spin 1s linear infinite;
+      margin: 10px auto;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Print With Ease</h1>
+  <p class="subtitle">Upload, preview, and confirm your documents with professional-grade accuracy</p>
+
+  <div class="container">
+    <!-- Form Section -->
+    <div class="form-section">
+      <form id="upload-form" enctype="multipart/form-data">
+        <label>Choose PDF</label>
+        <input type="file" name="file" accept="application/pdf" required>
+
+        <label>Print sides</label>
+        <select name="sides">
+          <option value="single">One-sided</option>
+          <option value="double">Two-sided</option>
+        </select>
+
+        <label>Orientation</label>
+        <select name="orientation">
+          <option value="portrait">Portrait</option>
+          <option value="landscape">Landscape</option>
+        </select>
+
+        <label>Color</label>
+        <select name="color_mode">
+          <option value="bw">Black & White</option>
+          <option value="color">Color</option>
+        </select>
+
+        <label>Paper size</label>
+        <select name="paper_size">
+          <option value="A4">A4</option>
+          <option value="A3">A3</option>
+          <option value="Letter">Letter</option>
+        </select>
+
+        <label>Page range</label>
+        <input type="text" name="pages" id="pages" placeholder="e.g. 1-3,5 or 2,4,6">
+        <div id="page-error" class="error-text">Invalid page range (use numbers and ranges, e.g. 1,3,5-7)</div>
+
+        <div class="info-box">
+          Preview your selected settings before uploading. After upload, total page count will be displayed.
+        </div>
+      </form>
+
+      <h3>Total Pages: <span id="total-pages">-</span></h3>
+
+      <div class="controls-row">
+        <button id="preview-btn">Preview</button>
+        <button id="upload-btn" disabled>Upload & Create Job</button>
+        <button id="print-btn" disabled>Confirm Print</button>
+      </div>
+
+      <div id="upload-result" class="info-box"></div>
+    </div>
+
+    <!-- Preview Section -->
+    <div class="preview-section">
+      <h3>Preview</h3>
+      <div id="preview-box">
+        <p style="color:#888;">No preview yet.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Your existing JS logic -->
+  <script>
+    (function () {
+      let selectedFile = null;
+      let jobId = null;
+      let totalPages = 0;
+
+      const fileInput = document.querySelector('input[name="file"]');
+      const previewBtn = document.getElementById("preview-btn");
+      const uploadBtn = document.getElementById("upload-btn");
+      const printBtn = document.getElementById("print-btn");
+      const previewBox = document.getElementById("preview-box");
+      const totalPagesEl = document.getElementById("total-pages");
+      const pagesInput = document.getElementById("pages");
+      const pageError = document.getElementById("page-error");
+      const uploadResult = document.getElementById("upload-result");
+
+      fileInput.addEventListener("change", (e) => {
+        selectedFile = e.target.files[0] || null;
+        uploadBtn.disabled = true;
+        printBtn.disabled = true;
+        uploadResult.textContent = "";
+      });
+
+      function isValidPageRange(str, maxPage) {
+        if (!str || !str.trim()) return true;
+        if (!maxPage || maxPage <= 0) return true;
+        const parts = str.split(",");
+        for (let raw of parts) {
+          const part = raw.trim();
+          if (!part) continue;
+          if (part.includes("-")) {
+            const bounds = part.split("-").map(s => s.trim());
+            if (bounds.length !== 2) return false;
+            const a = Number(bounds[0]);
+            const b = Number(bounds[1]);
+            if (!Number.isInteger(a) || !Number.isInteger(b)) return false;
+            if (a < 1 || b < 1 || a > b || b > maxPage) return false;
+          } else {
+            const n = Number(part);
+            if (!Number.isInteger(n)) return false;
+            if (n < 1 || n > maxPage) return false;
+          }
+        }
+        return true;
+      }
+
+      pagesInput.addEventListener("input", () => {
+        const val = pagesInput.value.trim();
+        const ok = isValidPageRange(val, totalPages);
+        pageError.style.display = ok ? "none" : "block";
+      });
+
+      previewBtn.addEventListener("click", async () => {
+        if (!selectedFile) {
+          return alert("Please choose a PDF file first.");
+        }
+        const form = document.getElementById("upload-form");
+        const fd = new FormData();
+        fd.append("file", selectedFile);
+        fd.append("orientation", form.orientation.value || "portrait");
+        fd.append("color_mode", form.color_mode.value || "color");
+        fd.append("pages", pagesInput.value.trim());
+
+        previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Generating preview...</p></div>`;
+        try {
+          const res = await fetch("/preview", { method: "POST", body: fd });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: "unknown" }));
+            previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'server error'}</p>`;
+            return;
+          }
+          const pagesHeader = res.headers.get("X-Total-Pages");
+          totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
+          totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
+
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          previewBox.innerHTML = "";
+          const embed = document.createElement("embed");
+          embed.src = url;
+          embed.type = "application/pdf";
+          previewBox.appendChild(embed);
+
+          uploadBtn.disabled = false;
+          pageError.style.display = "none";
+        } catch (err) {
+          console.error("Preview error:", err);
+          previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.message}</p>`;
+        }
+      });
+
+      uploadBtn.addEventListener("click", async () => {
+        if (!selectedFile) return alert("No file selected.");
+        const pagesVal = pagesInput.value.trim();
+        if (!isValidPageRange(pagesVal, totalPages)) {
+          return alert("Invalid page range. Please fix it before uploading.");
+        }
+        const form = document.getElementById("upload-form");
+        const fd = new FormData();
+        fd.append("file", selectedFile);
+        fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
+        fd.append("sides", form.sides.value);
+        fd.append("orientation", form.orientation.value);
+        fd.append("color_mode", form.color_mode.value);
+        fd.append("paper_size", form.paper_size.value);
+        fd.append("pages", pagesVal);
+
+        uploadResult.textContent = "Uploading...";
+        uploadBtn.disabled = true;
+        try {
+          const res = await fetch("/upload", { method: "POST", body: fd });
+          const data = await res.json();
+          if (res.ok && (data.job_id || data.job)) {
+            jobId = data.job_id || (data.job && data.job[0] && data.job[0].id) || null;
+            totalPages = data.total_pages || totalPages || 0;
+            totalPagesEl.textContent = totalPages || "-";
+            uploadResult.textContent = `Upload successful. Job ID: ${jobId || "n/a"}. Total pages: ${totalPages || "unknown"}`;
+            printBtn.disabled = false;
+          } else {
+            uploadResult.textContent = `Upload failed: ${data.error || JSON.stringify(data)}`;
+            uploadBtn.disabled = false;
+          }
+        } catch (err) {
+          console.error("Upload error:", err);
+          uploadResult.textContent = `Upload error: ${err.message}`;
+          uploadBtn.disabled = false;
+        }
+      });
+
+      printBtn.addEventListener("click", async () => {
+        if (!jobId) return alert("Please upload and create a job first.");
+        const form = document.getElementById("upload-form");
+        const payload = {
+          job_id: jobId,
+          sides: form.sides.value,
+          orientation: form.orientation.value,
+          color_mode: form.color_mode.value,
+          paper_size: form.paper_size.value,
+          pages: pagesInput.value.trim(),
+          total_pages: totalPages,
+          price: 0
+        };
+        try {
+          const res = await fetch("/print", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (res.ok && data.status === "confirmed") {
+            alert("Print order confirmed!");
+            printBtn.disabled = true;
+            uploadBtn.disabled = true;
+          } else {
+            alert("Failed to confirm print: " + (data.error || JSON.stringify(data)));
+          }
+        } catch (err) {
+          console.error("Confirm print error:", err);
+          alert("Error confirming print: " + err.message);
+        }
+      });
+
+    })();
+  </script>
+</body>
+
+</html>
