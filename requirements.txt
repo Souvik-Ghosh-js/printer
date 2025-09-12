@@ -5,4 +5,3 @@ docx2pdf
 supabase
 PyPDF2
 uuid
-mimetypes
