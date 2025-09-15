@@ -8,6 +8,10 @@ import io
 import os
 import fitz  # PyMuPDF
 import tempfile
+import razorpay
+import hmac
+import hashlib
+import base64
 
 # --- Supabase Config ---
 SUPABASE_URL = "https://fgksbxrxskwchjyqxpvx.supabase.co"
@@ -225,10 +229,7 @@ def confirm_print():
 
 
 
-import razorpay
-import hmac
-import hashlib
-import base64
+
 
 # --- Razorpay Config ---
 RAZORPAY_KEY_ID = "rzp_live_RHlZtgdPVmvvhx"
