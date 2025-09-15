@@ -16,9 +16,9 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Razorpay Config ---
-RAZORPAY_KEY_ID = "rzp_test_RHu0U9ZTT0s8Xi"
-RAZORPAY_KEY_SECRET = "5a29pB4UrdamngbGbvBPHIY1"
-RAZORPAY_WEBHOOK_SECRET = "your_webhook_secret_here"  # Create this in Razorpay Dashboard > Settings > Webhooks
+RAZORPAY_KEY_ID = "rzp_live_RHlZtgdPVmvvhx"
+RAZORPAY_KEY_SECRET = "h3GZvAq7ZDI6Xf6Q5snmClGx"
+RAZORPAY_WEBHOOK_SECRET = "!BwQ8QM55yeKqZ3"  # Create this in Razorpay Dashboard > Settings > Webhooks
 
 razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 app = Flask(__name__)
