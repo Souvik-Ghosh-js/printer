@@ -221,6 +221,124 @@ def confirm_print():
         return jsonify({"error": "Failed to confirm print", "detail": str(e)}), 500
 
 
+
+
+
+
+import razorpay
+import hmac
+import hashlib
+import base64
+
+# --- Razorpay Config ---
+RAZORPAY_KEY_ID = "rzp_live_RHlZtgdPVmvvhx"
+RAZORPAY_KEY_SECRET = "h3GZvAq7ZDI6Xf6Q5snmClGx"
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
+def calculate_price(total_pages, color_mode):
+    if total_pages <= 20:
+        return total_pages * (7 if color_mode == "color" else 3)
+    else:
+        first_20 = 20 * (7 if color_mode == "color" else 3)
+        remaining = (total_pages - 20) * (5 if color_mode == "color" else 2)
+        return first_20 + remaining
+
+
+
+# Update the verify_payment endpoint
+@app.route("/verify_payment", methods=["POST"])
+def verify_payment():
+    data = request.json
+    order_id = data.get("order_id")
+    payment_id = data.get("razorpay_payment_id")
+    signature = data.get("razorpay_signature")
+    job_id = data.get("job_id")  # Add job_id to the request
+    print(f"[DEBUG] Verifying payment for order_id: {order_id}, payment_id: {payment_id}, job_id: {job_id}")
+    try:
+        # Use Razorpay SDK utility for signature verification
+        params_dict = {
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': signature
+        }
+        razorpay_client.utility.verify_payment_signature(params_dict)
+        
+        # Update the job status to indicate payment is completed
+        if job_id:
+            supabase.table("print_jobs").update({
+                "payment_status": "completed",
+                "payment_id": payment_id,
+                "order_id": order_id
+            }).eq("id", job_id).execute()
+        print(f"[INFO] Payment verified for order_id: {order_id}, job_id: {job_id}")
+        return jsonify({"status": "success", "message": "Payment verified successfully"})
+    except razorpay.errors.SignatureVerificationError:
+        print(f"[ERROR] Signature verification failed for order_id: {order_id}")
+        return jsonify({"status": "failed", "error": "Signature mismatch"}), 400
+    except Exception as e:
+        print(f"[ERROR] Payment verification failed: {e}")
+        return jsonify({"status": "failed", "error": str(e)}), 500
+
+
+
+# Add these imports at the top
+import time
+from datetime import datetime
+
+# Add this endpoint to check payment status
+@app.route("/check_payment_status", methods=["POST"])
+def check_payment_status():
+    data = request.json
+    order_id = data.get("order_id")
+    job_id = data.get("job_id")
+    print(f"[DEBUG] Checking payment status for order_id: {order_id}, job_id: {job_id}")
+    try:
+        # Check with Razorpay for payment status
+        payment = razorpay_client.payment.fetch(order_id)
+        
+        if payment.get('status') == 'captured':
+            # Update the job status
+            supabase.table("print_jobs").update({
+                "payment_status": "completed",
+                "payment_id": payment.get('id'),
+                "order_id": order_id
+            }).eq("id", job_id).execute()
+            
+            return jsonify({"status": "paid"})
+        else:
+            return jsonify({"status": payment.get('status', 'pending')})
+            
+    except Exception as e:
+        print(f"Error checking payment status: {e}")
+        return jsonify({"status": "unknown"}), 500
+
+# Update your create_order endpoint to include job_id in the notes
+@app.route("/create_order", methods=["POST"])
+def create_order():
+    data = request.json
+    total_pages = int(data.get("total_pages", 0))
+    color_mode = data.get("color_mode", "bw")
+    job_id = data.get("job_id")
+    price = calculate_price(total_pages, color_mode)
+
+    try:
+        order = razorpay_client.order.create(dict(
+            amount=price * 100,  # INR in paise
+            currency="INR",
+            payment_capture=1,
+            notes={
+                "job_id": job_id,
+                "total_pages": total_pages,
+                "color_mode": color_mode
+            }
+        ))
+        print(f"[INFO] Created Razorpay order: {order}")
+        return jsonify({"order_id": order["id"], "amount": price, "currency": "INR"})
+    except Exception as e:
+        return jsonify({"error": "Failed to create order", "detail": str(e)}), 500
+    
+
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)

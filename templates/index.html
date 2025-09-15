@@ -5,6 +5,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PDF Print Job Portal</title>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  
   <style>
     /* ---------- GLOBAL THEME ---------- */
     body {
@@ -262,6 +264,34 @@
         transform: rotate(360deg);
       }
     }
+
+    /* Payment status styles */
+    .payment-success {
+      color: green;
+      font-weight: bold;
+      padding: 10px;
+      background: #e8f5e9;
+      border-radius: 5px;
+      margin-top: 10px;
+    }
+
+    .payment-error {
+      color: #d32f2f;
+      font-weight: bold;
+      padding: 10px;
+      background: #ffebee;
+      border-radius: 5px;
+      margin-top: 10px;
+    }
+
+    .payment-pending {
+      color: #ff9800;
+      font-weight: bold;
+      padding: 10px;
+      background: #fff3e0;
+      border-radius: 5px;
+      margin-top: 10px;
+    }
   </style>
   <!-- PDF.js library for mobile devices -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
@@ -277,13 +307,6 @@
       <form id="upload-form" enctype="multipart/form-data">
         <label>Choose PDF</label>
         <input type="file" name="file" accept="application/pdf" required>
-
-        <label>Print sides</label>
-        <select name="sides">
-          <option value="single">One-sided</option>
-          <option value="double">Two-sided</option>
-        </select>
-
         <label>Orientation</label>
         <select name="orientation">
           <option value="portrait">Portrait</option>
@@ -296,13 +319,7 @@
           <option value="color">Color</option>
         </select>
 
-        <label>Paper size</label>
-        <select name="paper_size">
-          <option value="A4">A4</option>
-          <option value="A3">A3</option>
-          <option value="Letter">Letter</option>
-        </select>
-
+     
         <label>Page range</label>
         <input type="text" name="pages" id="pages" placeholder="e.g. 1-3,5 or 2,4,6">
         <div id="page-error" class="error-text">Invalid page range (use numbers and ranges, e.g. 1,3,5-7)</div>
@@ -321,6 +338,7 @@
       </div>
 
       <div id="upload-result" class="info-box"></div>
+      <div id="payment-status"></div>
     </div>
 
     <!-- Preview Section -->
@@ -358,6 +376,8 @@
   let currentPageNum = 1;
   let pdfRendering = false;
   let pdfRenderQueue = null;
+  let paymentVerified = false;
+  let paymentCheckInterval = null;
 
   const fileInput = document.querySelector('input[name="file"]');
   const previewBtn = document.getElementById("preview-btn");
@@ -368,6 +388,7 @@
   const pagesInput = document.getElementById("pages");
   const pageError = document.getElementById("page-error");
   const uploadResult = document.getElementById("upload-result");
+  const paymentStatus = document.getElementById("payment-status");
   const pdfControls = document.getElementById("pdf-controls");
   const prevPageBtn = document.getElementById("prev-page");
   const nextPageBtn = document.getElementById("next-page");
@@ -382,6 +403,8 @@
     uploadBtn.disabled = true;
     printBtn.disabled = true;
     uploadResult.textContent = "";
+    paymentStatus.textContent = "";
+    paymentStatus.className = "";
     pdfControls.style.display = 'none';
 
     currentPdf = null;
@@ -559,6 +582,28 @@
     }
   });
 
+  // Function to check payment status
+  async function checkPaymentStatus(orderId, jobId) {
+    try {
+      const res = await fetch("/check_payment_status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: orderId, job_id: jobId })
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        return data;
+      } else {
+        console.error("Failed to check payment status");
+        return { status: "unknown" };
+      }
+    } catch (error) {
+      console.error("Error checking payment status:", error);
+      return { status: "unknown" };
+    }
+  }
+
   uploadBtn.addEventListener("click", async () => {
     if (!selectedFile) return alert("No file selected.");
     const pagesVal = pagesInput.value.trim();
@@ -570,14 +615,13 @@
     const fd = new FormData();
     fd.append("file", selectedFile);
     fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
-    fd.append("sides", form.sides.value);
     fd.append("orientation", form.orientation.value);
     fd.append("color_mode", form.color_mode.value);
-    fd.append("paper_size", form.paper_size.value);
     fd.append("pages", pagesVal);
 
     uploadResult.textContent = "Uploading...";
     uploadBtn.disabled = true;
+
     try {
       const res = await fetch("/upload", { method: "POST", body: fd });
       const data = await res.json();
@@ -585,15 +629,131 @@
         jobId = data.job_id || (data.job && data.job[0] && data.job[0].id) || null;
         totalPages = data.total_pages || totalPages || 0;
         totalPagesEl.textContent = totalPages || "-";
-        uploadResult.textContent = `Upload successful. Job ID: ${jobId || "n/a"}. Total pages: ${totalPages || "unknown"}`;
-        printBtn.disabled = false;
+
+        // Step 1: Request backend to create Razorpay order
+        const orderRes = await fetch("/create_order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ total_pages: totalPages, color_mode: form.color_mode.value, job_id: jobId })
+        });
+        const orderData = await orderRes.json();
+        if (!orderRes.ok) throw new Error(orderData.error || "Order creation failed");
+
+        // Step 2: Open Razorpay Checkout
+        const options = {
+          key: "rzp_live_RHlZtgdPVmvvhx",
+          amount: orderData.amount * 100,
+          currency: "INR",
+          name: "PDF Print Job",
+          description: "Pay for printing",
+          order_id: orderData.order_id,
+          handler: async function (response) {
+            // Step 3: Verify Payment
+            try {
+              const verifyRes = await fetch("/verify_payment", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  order_id: orderData.order_id,
+                  razorpay_payment_id: response.razorpay_payment_id,
+                  razorpay_signature: response.razorpay_signature,
+                  job_id: jobId
+                })
+              });
+              const verifyData = await verifyRes.json();
+              
+              if (verifyRes.ok && verifyData.status === "success") {
+                paymentVerified = true;
+                if (paymentCheckInterval) clearInterval(paymentCheckInterval);
+                
+                uploadResult.textContent = `Payment successful! Job ID: ${jobId}. Total pages: ${totalPages}`;
+                uploadResult.className = "payment-success";
+                printBtn.disabled = false;
+                
+                // Close the Razorpay modal (if still open)
+                if (typeof rzp.close === 'function') {
+                  rzp.close();
+                }
+              } else {
+                uploadResult.textContent = `Payment verification failed: ${verifyData.error}`;
+                uploadResult.className = "payment-error";
+                uploadBtn.disabled = false;
+              }
+            } catch (err) {
+              console.error("Payment verification error:", err);
+              uploadResult.textContent = `Error during payment verification: ${err.message}`;
+              uploadResult.className = "payment-error";
+              uploadBtn.disabled = false;
+            }
+          },
+          modal: {
+            ondismiss: function() {
+              // This function is called when the modal is closed without payment
+              console.log("Payment modal dismissed");
+              
+              // If payment wasn't verified, check if it was completed in the background
+              if (!paymentVerified) {
+                paymentStatus.textContent = "Checking payment status...";
+                paymentStatus.className = "payment-pending";
+                
+                // Start checking payment status periodically
+                if (paymentCheckInterval) clearInterval(paymentCheckInterval);
+                paymentCheckInterval = setInterval(async () => {
+                  const status = await checkPaymentStatus(orderData.order_id, jobId);
+                  if (status.status === "paid") {
+                    clearInterval(paymentCheckInterval);
+                    paymentVerified = true;
+                    paymentStatus.textContent = "Payment verified!";
+                    paymentStatus.className = "payment-success";
+                    uploadResult.textContent = `Payment successful! Job ID: ${jobId}`;
+                    uploadResult.className = "payment-success";
+                    printBtn.disabled = false;
+                  } else if (status.status === "failed") {
+                    clearInterval(paymentCheckInterval);
+                    paymentStatus.textContent = "Payment failed or was cancelled";
+                    paymentStatus.className = "payment-error";
+                    uploadBtn.disabled = false;
+                  }
+                }, 3000); // Check every 3 seconds
+                
+                // Stop checking after 2 minutes
+                setTimeout(() => {
+                  if (paymentCheckInterval) {
+                    clearInterval(paymentCheckInterval);
+                    if (!paymentVerified) {
+                      paymentStatus.textContent = "Payment status unknown. Please contact support if you've made payment.";
+                      paymentStatus.className = "payment-pending";
+                      uploadBtn.disabled = false;
+                    }
+                  }
+                }, 120000);
+              }
+            }
+          },
+          theme: { color: "#3399cc" }
+        };
+
+        // Add error handling for the payment process
+        const rzp = new Razorpay(options);
+        rzp.on('payment.failed', function (response) {
+          console.error("Payment failed:", response.error);
+          uploadResult.textContent = `Payment failed: ${response.error.description}`;
+          uploadResult.className = "payment-error";
+          uploadBtn.disabled = false;
+          
+          if (paymentCheckInterval) clearInterval(paymentCheckInterval);
+        });
+
+        rzp.open();
       } else {
         uploadResult.textContent = `Upload failed: ${data.error || JSON.stringify(data)}`;
+        uploadResult.className = "payment-error";
         uploadBtn.disabled = false;
       }
     } catch (err) {
       console.error("Upload error:", err);
-      uploadResult.textContent = `Upload error: ${err.message}`;
+      uploadResult.textContent = `Error: ${err.message}`;
+      uploadResult.className = "payment-error";
       uploadBtn.disabled = false;
     }
   });
