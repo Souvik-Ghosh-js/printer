@@ -10,3 +10,4 @@ reportlab
 pdf2image
 img2pdf
 razorpay
+setuptools
