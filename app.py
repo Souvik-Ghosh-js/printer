@@ -285,15 +285,13 @@ def create_payment():
         # Update the job with order ID
         try:
             supabase.table("print_jobs").update({
-                "order_id": order_id,
-                "payment_status": "pending"
+                "status": "uploaded"
             }).eq("id", job_id).execute()
         except Exception as e:
             print(f"Error updating job with order ID: {e}")
         
         return jsonify({
             "payment_session_id": result["payment_session_id"],
-            "order_id": order_id,
             "mode": CASHFREE_ENV
         })
     else:
@@ -326,10 +324,7 @@ def payment_callback():
             # Update the order status in database
             try:
                 # Update payment status
-                supabase.table("print_jobs").update({
-                    "payment_status": payment_status,
-                    "updated_at": datetime.utcnow().isoformat()
-                }).eq("order_id", order_id).execute()
+                
                 
                 # If payment is successful, update job status to "completed"
                 if payment_status == "PAID":

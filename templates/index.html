@@ -292,11 +292,7 @@
         <label>Choose PDF</label>
         <input type="file" name="file" accept="application/pdf" required>
 
-        <label>Print sides</label>
-        <select name="sides">
-          <option value="single">One-sided</option>
-          <option value="double">Two-sided</option>
-        </select>
+        
 
         <label>Orientation</label>
         <select name="orientation">
@@ -310,13 +306,7 @@
           <option value="color">Color</option>
         </select>
 
-        <label>Paper size</label>
-        <select name="paper_size">
-          <option value="A4">A4</option>
-          <option value="A3">A3</option>
-          <option value="Letter">Letter</option>
-        </select>
-
+     
         <label>Page range</label>
         <input type="text" name="pages" id="pages" placeholder="e.g. 1-3,5 or 2,4,6">
         <div id="page-error" class="error-text">Invalid page range (use numbers and ranges, e.g. 1,3,5-7)</div>
@@ -642,18 +632,15 @@
       uploadBtn.addEventListener("click", async () => {
         if (!selectedFile) return alert("No file selected.");
         const pagesVal = pagesInput.value.trim();
-        if (!isValidPageRange(pagesVal, totalPages)) {
-          return alert("Invalid page range. Please fix it before uploading.");
-        }
+        console.log("Validating page range:", pagesVal, totalPages);
+
 
         const form = document.getElementById("upload-form");
         const fd = new FormData();
         fd.append("file", selectedFile);
         fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
-        fd.append("sides", form.sides.value);
         fd.append("orientation", form.orientation.value);
         fd.append("color_mode", form.color_mode.value);
-        fd.append("paper_size", form.paper_size.value);
         fd.append("pages", pagesVal);
 
         // Calculate price based on pages and color mode
@@ -692,10 +679,10 @@
         
         const payload = {
           job_id: jobId,
-          sides: form.sides.value,
+          sides: "single",
           orientation: form.orientation.value,
           color_mode: colorMode,
-          paper_size: form.paper_size.value,
+          paper_size: "A4",
           pages: pagesInput.value.trim(),
           total_pages: totalPages,
           price: price
