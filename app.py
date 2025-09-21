@@ -312,7 +312,7 @@ def payment_callback():
         # Verify webhook signature
         signature = request.headers.get("x-webhook-signature")
         webhook_data = request.get_json()
-        
+        print("Received webhook:", webhook_data)
         if not verify_webhook_signature(webhook_data, signature):
             return jsonify({"error": "Invalid signature"}), 401
         
