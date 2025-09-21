@@ -278,7 +278,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
 </head>
 <body>
-  <h1>Print With Ease</h1>
+  <h1>Mohini Print Shop</h1>
   <p class="subtitle">Upload, preview, and confirm your documents with professional-grade accuracy</p>
 
   <div id="success-message" class="success-message">
@@ -704,7 +704,7 @@
             paymentModal.style.display = "block";
             
             // Initialize Cashfree checkout
-            const cashfree = new Cashfree({ mode: data.mode || "sandbox" });
+            const cashfree = new Cashfree({ mode: "production" });
             
             cashfree.checkout({
               paymentSessionId: data.payment_session_id,
