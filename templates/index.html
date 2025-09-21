@@ -5,8 +5,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PDF Print Job Portal</title>
-      <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-
+<!-- ADD this -->
+<script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
   <style>
     /* ---------- GLOBAL THEME ---------- */
     body {
@@ -315,11 +315,12 @@
       </form>
 
       <h3>Total Pages: <span id="total-pages">-</span></h3>
+      <h3>Estimated Price: ₹<span id="estimated-price">0.00</span></h3>
 
       <div class="controls-row">
         <button id="preview-btn">Preview</button>
         <button id="upload-btn" disabled>Upload & Create Job</button>
-        <button id="print-btn" disabled>Confirm Print</button>
+        <button id="print-btn" disabled>Proceed to Payment</button>
       </div>
 
       <div id="upload-result" class="info-box"></div>
@@ -339,6 +340,17 @@
         <span id="page-num" class="page-info">Page: 1 of 1</span>
         <button id="next-page">Next</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Payment Modal -->
+  <div id="payment-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 10px; width: 90%; max-width: 500px;">
+      <h2>Complete Payment</h2>
+      <p>Job ID: <span id="payment-job-id"></span></p>
+      <p>Total Amount: ₹<span id="payment-amount"></span></p>
+      <div id="payment-form"></div>
+      <button id="close-payment" style="margin-top: 20px; padding: 10px; background: #e74c3c; color: white; border: none; border-radius: 5px; cursor: pointer;">Cancel</button>
     </div>
   </div>
 
@@ -367,6 +379,7 @@
       const printBtn = document.getElementById("print-btn");
       const previewBox = document.getElementById("preview-box");
       const totalPagesEl = document.getElementById("total-pages");
+      const estimatedPriceEl = document.getElementById("estimated-price");
       const pagesInput = document.getElementById("pages");
       const pageError = document.getElementById("page-error");
       const uploadResult = document.getElementById("upload-result");
@@ -374,10 +387,21 @@
       const prevPageBtn = document.getElementById("prev-page");
       const nextPageBtn = document.getElementById("next-page");
       const pageNumSpan = document.getElementById("page-num");
+      const paymentModal = document.getElementById("payment-modal");
+      const paymentJobId = document.getElementById("payment-job-id");
+      const paymentAmount = document.getElementById("payment-amount");
+      const paymentForm = document.getElementById("payment-form");
+      const closePaymentBtn = document.getElementById("close-payment");
 
       // Set up PDF.js worker
       pdfjsLib = window['pdfjs-dist/build/pdf'];
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+      // Price calculation (simple example: ₹2 per page for B/W, ₹10 for color)
+      function calculatePrice(pages, colorMode) {
+        const rate = colorMode === 'color' ? 10 : 2;
+        return (pages * rate).toFixed(2);
+      }
 
       fileInput.addEventListener("change", (e) => {
         selectedFile = e.target.files[0] || null;
@@ -385,6 +409,7 @@
         printBtn.disabled = true;
         uploadResult.textContent = "";
         pdfControls.style.display = 'none';
+        estimatedPriceEl.textContent = "0.00";
 
         currentPdf = null;
         currentPageNum = 1;
@@ -478,6 +503,10 @@
           const pagesHeader = res.headers.get("X-Total-Pages");
           totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
           totalPagesEl.textContent = totalPages || "-";
+          
+          // Update estimated price
+          const colorMode = form.color_mode.value || "color";
+          estimatedPriceEl.textContent = calculatePrice(totalPages, colorMode);
 
           const arrayBuffer = await res.arrayBuffer();
           const typedarray = new Uint8Array(arrayBuffer);
@@ -543,6 +572,10 @@
           const pagesHeader = res.headers.get("X-Total-Pages");
           totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
           totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
+          
+          // Update estimated price
+          const colorMode = form.color_mode.value || "color";
+          estimatedPriceEl.textContent = calculatePrice(totalPages, colorMode);
 
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
@@ -578,6 +611,11 @@
         fd.append("paper_size", form.paper_size.value);
         fd.append("pages", pagesVal);
 
+        // Calculate price based on pages and color mode
+        const colorMode = form.color_mode.value || "color";
+        const price = calculatePrice(totalPages, colorMode);
+        fd.append("price", price);
+
         uploadResult.textContent = "Uploading...";
         uploadBtn.disabled = true;
         try {
@@ -604,54 +642,72 @@
         if (!jobId) return alert("Please upload and create a job first.");
 
         const form = document.getElementById("upload-form");
+        const colorMode = form.color_mode.value || "color";
+        const price = calculatePrice(totalPages, colorMode);
+        
         const payload = {
           job_id: jobId,
           sides: form.sides.value,
           orientation: form.orientation.value,
-          color_mode: form.color_mode.value,
+          color_mode: colorMode,
           paper_size: form.paper_size.value,
           pages: pagesInput.value.trim(),
           total_pages: totalPages,
-          price: 1 // Example price (₹50)
+          price: price
         };
 
         try {
-          const res = await fetch("/print", {
+          const res = await fetch("/create-payment", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
           });
+
           const data = await res.json();
 
-          if (res.ok && data.status === "order_created") {
-            // Open Razorpay Checkout
-            const options = {
-              key: data.razorpay_key,
-              amount: data.amount,
-              currency: data.currency,
-              name: "PDF Print Portal",
-              description: "Print Job Payment",
-              order_id: data.razorpay_order_id,
-              handler: function (response) {
-                alert("Payment successful! Razorpay Payment ID: " + response.razorpay_payment_id);
-                printBtn.disabled = true;
-                uploadBtn.disabled = true;
-              },
-              theme: { color: "#3399cc" }
-            };
-            const rzp = new Razorpay(options);
-            rzp.open();
+          if (res.ok && data.payment_session_id) {
+            // Show payment modal
+            paymentJobId.textContent = jobId;
+            paymentAmount.textContent = price;
+            paymentModal.style.display = "block";
+            
+            // Initialize Cashfree checkout
+            const cashfree = new Cashfree({ mode: data.mode || "sandbox" });
+            
+            cashfree.checkout({
+              paymentSessionId: data.payment_session_id,
+              redirectTarget: "_modal",
+              container: paymentForm
+            });
           } else {
-            alert("Failed to create Razorpay order: " + (data.error || JSON.stringify(data)));
+            alert("Failed to create payment session: " + (data.error || JSON.stringify(data)));
           }
         } catch (err) {
-          console.error("Confirm print error:", err);
-          alert("Error confirming print: " + err.message);
+          console.error("Payment initiation error:", err);
+          alert("Error initiating payment: " + err.message);
         }
       });
+
+      // Close payment modal
+      closePaymentBtn.addEventListener("click", function() {
+        paymentModal.style.display = "none";
+        paymentForm.innerHTML = "";
+      });
+
+      // Listen for payment success events
+      window.addEventListener("message", function(event) {
+        if (event.data && event.data.type === "PAYMENT_SUCCESS") {
+          alert("Payment successful! Your print job has been confirmed.");
+          paymentModal.style.display = "none";
+          paymentForm.innerHTML = "";
+          // You can redirect to a success page or update UI here
+        } else if (event.data && event.data.type === "PAYMENT_FAILED") {
+          alert("Payment failed. Please try again.");
+        }
+      });
+
     })();
   </script>
 
 </body>
-
 </html>

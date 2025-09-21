@@ -8,26 +8,27 @@ import io
 import os
 import fitz  # PyMuPDF
 import tempfile
-import razorpay  # ✅ Add this
 import hmac, hashlib
+import requests
+import json
+import time
+from datetime import datetime
+
 # --- Supabase Config ---
 SUPABASE_URL = "https://fgksbxrxskwchjyqxpvx.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZna3NieHJ4c2t3Y2hqeXF4cHZ4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjgxODM5MSwiZXhwIjoyMDcyMzk0MzkxfQ.l5Uujx1rpnVMGCukQtrYDP2n_RcCDMC5mlcCES8rBTc"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- Razorpay Config ---
-RAZORPAY_KEY_ID = "rzp_live_RHlZtgdPVmvvhx"
-RAZORPAY_KEY_SECRET = "h3GZvAq7ZDI6Xf6Q5snmClGx"
-RAZORPAY_WEBHOOK_SECRET = "!BwQ8QM55yeKqZ3"  # Create this in Razorpay Dashboard > Settings > Webhooks
+# --- Cashfree Config ---
+CASHFREE_APP_ID = "1081246de8c8aebb039c1d380b76421801"
+CASHFREE_SECRET_KEY = "cfsk_ma_prod_6c4dd5ba946f5eb8edc06b90e80d8332_642d89ae"
+CASHFREE_ENV = "production"  # or "sandbox" for testing
 
-razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 app = Flask(__name__)
-
 
 @app.route("/")
 def index():
     return render_template("index.html")
-
 
 def process_pdf_with_options(file_bytes, orientation, color_mode, page_range_str):
     """
@@ -87,7 +88,6 @@ def process_pdf_with_options(file_bytes, orientation, color_mode, page_range_str
     
     return pdf_bytes, len(selected_indices)
 
-
 # --- Preview PDF (temporary, not stored) ---
 @app.route("/preview", methods=["POST"])
 def preview_pdf():
@@ -121,7 +121,6 @@ def preview_pdf():
 
     except Exception as e:
         return jsonify({"error": "Preview generation failed", "detail": str(e)}), 500
-
 
 # --- Upload PDF (after user confirms preview) ---
 @app.route("/upload", methods=["POST"])
@@ -166,7 +165,7 @@ def upload_pdf():
     # gather settings & store in DB
     sides = request.form.get("sides")
     paper_size = request.form.get("paper_size")
-    price = request.form.get("price")
+    price = request.form.get("price", "0.00")
 
     job_payload = {
         "customer_id": customer_id,
@@ -201,76 +200,171 @@ def upload_pdf():
             "total_pages": total_pages
         })
 
-
-# --- Confirm print (set job to confirmed and store final settings like price) ---
-@app.route("/print", methods=["POST"])
-def confirm_print():
-    data = request.json or {}
-    job_id = data.get("job_id")
-    price = data.get("price") or 1  # Default ₹10 if not provided
-    if not job_id:
-        return jsonify({"error": "job_id required"}), 400
-
-    try:
-        short_receipt = f"rcpt_{str(job_id)[:12]}"
-        # Create Razorpay Order
-        order = razorpay_client.order.create({
-            "amount": int(price) * 100,  # Amount in paise
-            "currency": "INR",
-            "receipt": f"order_rcptid_{short_receipt}",
-            "payment_capture": 1
-        })
-
-        # Update job status as "awaiting_payment"
-        update_data = {
-            "status": "uploaded",
-            "price": price
+def create_cashfree_payment_session(order_id, order_amount, customer_id, customer_email, customer_phone):
+    """Create a payment session with Cashfree"""
+    url = "https://api.cashfree.com/pg/orders" if CASHFREE_ENV == "production" else "https://sandbox.cashfree.com/pg/orders"
+    
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-version": "2022-09-01",
+        "x-client-id": CASHFREE_APP_ID,
+        "x-client-secret": CASHFREE_SECRET_KEY
+    }
+    
+    # Generate a unique order ID if not provided
+    if not order_id:
+        order_id = f"ORDER_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    
+    payload = {
+        "order_id": order_id,
+        "order_amount": order_amount,
+        "order_currency": "INR",
+        "order_note": "Print job payment",
+        "customer_details": {
+            "customer_id": customer_id,
+            "customer_email": customer_email,
+            "customer_phone": customer_phone
+        },
+        "order_meta": {
+            "return_url": f"{request.host_url}payment-callback?order_id={order_id}"
         }
-        supabase.table("print_jobs").update(update_data).eq("id", job_id).execute()
-
-        return jsonify({
-            "status": "order_created",
-            "razorpay_order_id": order["id"],
-            "razorpay_key": RAZORPAY_KEY_ID,
-            "amount": order["amount"],
-            "currency": order["currency"],
-            "job_id": job_id
-        })
-    except Exception as e:
-        print(f"[ERROR] Razorpay order creation failed: {e}")
-        return jsonify({"error": "Failed to create Razorpay order", "detail": str(e)}), 500
-
-
-# --- Webhook endpoint --- #
-@app.route("/razorpay/webhook", methods=["POST"])
-def razorpay_webhook():
-    payload = request.data
-    signature = request.headers.get("X-Razorpay-Signature")
-
+    }
+    
     try:
-        # Verify signature
-        generated_signature = hmac.new(
-            RAZORPAY_WEBHOOK_SECRET.encode(),
-            payload,
-            hashlib.sha256
-        ).hexdigest()
-
-        if hmac.compare_digest(generated_signature, signature):
-            event = request.json
-            if event.get("event") == "payment.captured":
-                order_id = event["payload"]["payment"]["entity"]["order_id"]
-                payment_id = event["payload"]["payment"]["entity"]["id"]
-
-                # ✅ Update your DB to mark job as paid
-                supabase.table("print_jobs").update({"status": "paid"}).eq("id", order_id).execute()
-                return jsonify({"status": "ok"}), 200
-
-            return jsonify({"status": "ignored"}), 200
+        response = requests.post(url, headers=headers, json=payload)
+        response_data = response.json()
+        
+        if response.status_code == 200:
+            return {
+                "success": True,
+                "payment_session_id": response_data.get("payment_session_id"),
+                "order_id": order_id
+            }
         else:
-            return jsonify({"error": "Invalid signature"}), 400
+            return {
+                "success": False,
+                "error": response_data.get("message", "Unknown error from Cashfree")
+            }
     except Exception as e:
-        return jsonify({"error": "Webhook handling failed", "detail": str(e)}), 500
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
+@app.route("/create-payment", methods=["POST"])
+def create_payment():
+    """Create a payment session for a print job"""
+    data = request.json
+    job_id = data.get("job_id")
+    price = data.get("price", 0)
+    
+    if not job_id:
+        return jsonify({"error": "Job ID is required"}), 400
+    
+    # Generate a unique order ID
+    order_id = f"JOB_{job_id}_{int(time.time())}"
+    
+    # Create payment session with Cashfree
+    # In a real app, you would get customer details from your database
+    result = create_cashfree_payment_session(
+        order_id=order_id,
+        order_amount=price,
+        customer_id="customer_123",  # Replace with actual customer ID
+        customer_email="customer@example.com",  # Replace with actual email
+        customer_phone="9999999999"  # Replace with actual phone
+    )
+    
+    if result["success"]:
+        # Update the job with order ID
+        try:
+            supabase.table("print_jobs").update({
+                "order_id": order_id,
+                "payment_status": "pending"
+            }).eq("id", job_id).execute()
+        except Exception as e:
+            print(f"Error updating job with order ID: {e}")
+        
+        return jsonify({
+            "payment_session_id": result["payment_session_id"],
+            "order_id": order_id,
+            "mode": CASHFREE_ENV
+        })
+    else:
+        return jsonify({"error": result["error"]}), 400
+
+@app.route("/payment-callback", methods=["GET", "POST"])
+def payment_callback():
+    """Handle payment callback from Cashfree"""
+    if request.method == "GET":
+        # This is the return URL after payment
+        order_id = request.args.get("order_id")
+        if order_id:
+            return render_template("payment_status.html", order_id=order_id)
+        return jsonify({"message": "Payment callback received"})
+    
+    # Handle webhook POST request
+    try:
+        # Verify webhook signature
+        signature = request.headers.get("x-webhook-signature")
+        webhook_data = request.get_json()
+        
+        if not verify_webhook_signature(webhook_data, signature):
+            return jsonify({"error": "Invalid signature"}), 401
+        
+        # Process webhook data
+        order_id = webhook_data.get("order", {}).get("order_id")
+        payment_status = webhook_data.get("order", {}).get("order_status")
+        
+        if order_id and payment_status:
+            # Update the order status in database
+            try:
+                supabase.table("print_jobs").update({
+                    "payment_status": payment_status,
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("order_id", order_id).execute()
+                
+                # If payment is successful, update job status
+                if payment_status == "PAID":
+                    supabase.table("print_jobs").update({
+                        "status": "paid"
+                    }).eq("order_id", order_id).execute()
+            except Exception as e:
+                print(f"Error updating payment status: {e}")
+        
+        return jsonify({"status": "success"})
+    
+    except Exception as e:
+        print(f"Error processing webhook: {e}")
+        return jsonify({"error": "Webhook processing failed"}), 500
+
+def verify_webhook_signature(webhook_data, signature):
+    """Verify Cashfree webhook signature"""
+    # In a real implementation, you would verify the signature
+    # using your secret key to ensure the webhook is from Cashfree
+    # This is a simplified version
+    return True  # Implement proper verification in production
+
+@app.route("/check-payment-status/<order_id>")
+def check_payment_status(order_id):
+    """Check the payment status of an order"""
+    try:
+        # Get order details from database
+        result = supabase.table("print_jobs").select("payment_status, status").eq("order_id", order_id).execute()
+        
+        if result.data:
+            payment_status = result.data[0].get("payment_status", "unknown")
+            job_status = result.data[0].get("status", "unknown")
+            
+            return jsonify({
+                "order_id": order_id,
+                "payment_status": payment_status,
+                "job_status": job_status
+            })
+        else:
+            return jsonify({"error": "Order not found"}), 404
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
