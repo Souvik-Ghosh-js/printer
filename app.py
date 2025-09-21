@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, render_template, send_file
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 from supabase import create_client
 import uuid
 import mimetypes
@@ -14,6 +15,8 @@ import json
 import time
 from datetime import datetime
 
+
+
 # --- Supabase Config ---
 SUPABASE_URL = "https://fgksbxrxskwchjyqxpvx.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZna3NieHJ4c2t3Y2hqeXF4cHZ4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjgxODM5MSwiZXhwIjoyMDcyMzk0MzkxfQ.l5Uujx1rpnVMGCukQtrYDP2n_RcCDMC5mlcCES8rBTc"
@@ -25,6 +28,7 @@ CASHFREE_SECRET_KEY = "cfsk_ma_prod_6c4dd5ba946f5eb8edc06b90e80d8332_642d89ae"
 CASHFREE_ENV = "production"  # or "sandbox" for testing
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 @app.route("/")
 def index():
@@ -215,6 +219,10 @@ def create_cashfree_payment_session(order_id, order_amount, customer_id, custome
     if not order_id:
         order_id = f"ORDER_{int(time.time())}_{uuid.uuid4().hex[:8]}"
     
+    # Ensure we're using HTTPS for the return URL
+    base_url = request.url_root.replace('http://', 'https://')
+    return_url = f"{base_url}payment-callback?order_id={order_id}"
+    
     payload = {
         "order_id": order_id,
         "order_amount": order_amount,
@@ -226,7 +234,7 @@ def create_cashfree_payment_session(order_id, order_amount, customer_id, custome
             "customer_phone": customer_phone
         },
         "order_meta": {
-            "return_url": f"{request.host_url}payment-callback?order_id={order_id}"
+            "return_url": return_url  # This will now be HTTPS
         }
     }
     
@@ -250,6 +258,7 @@ def create_cashfree_payment_session(order_id, order_amount, customer_id, custome
             "success": False,
             "error": str(e)
         }
+
 
 @app.route("/create-payment", methods=["POST"])
 def create_payment():
@@ -291,6 +300,8 @@ def create_payment():
         })
     else:
         return jsonify({"error": result["error"]}), 400
+
+# ... (keep your existing payment_callback and check_payment_status routes)
 
 @app.route("/payment-callback", methods=["GET", "POST"])
 def payment_callback():
