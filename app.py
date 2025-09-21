@@ -285,8 +285,7 @@ def create_payment():
         # Update the job with order ID
         try:
             supabase.table("print_jobs").update({
-                "order_id": order_id,
-                "status": "payment_pending"
+                "status": "uploaded"
             }).eq("id", job_id).execute()
         except Exception as e:
             print(f"Error updating job with order ID: {e}")
@@ -297,80 +296,6 @@ def create_payment():
         })
     else:
         return jsonify({"error": result["error"]}), 400
-
-@app.route("/update-job-status", methods=["POST"])
-def update_job_status():
-    """Update job status after successful payment"""
-    data = request.json
-    job_id = data.get("job_id")
-    status = data.get("status")
-    
-    if not job_id or not status:
-        return jsonify({"error": "Job ID and status are required"}), 400
-    
-    try:
-        # Update the job status in database
-        result = supabase.table("print_jobs").update({
-            "status": status,
-            "payment_status": "SUCCESS",
-            "payment_date": datetime.now().isoformat()
-        }).eq("id", job_id).execute()
-        
-        if result.data:
-            return jsonify({"status": "success", "message": "Job status updated successfully"})
-        else:
-            return jsonify({"error": "Job not found"}), 404
-            
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/track", methods=["POST"])
-def track_payment():
-    """Endpoint to track payment status (called by Cashfree webhook)"""
-    try:
-        # Verify webhook signature
-        signature = request.headers.get("x-webhook-signature")
-        webhook_data = request.get_json()
-        
-        if not verify_webhook_signature(webhook_data, signature):
-            return jsonify({"error": "Invalid signature"}), 401
-        
-        # Process webhook data
-        order_id = webhook_data.get("order", {}).get("order_id")
-        payment_status = webhook_data.get("order", {}).get("order_status")
-        
-        if order_id and payment_status:
-            # Update the order status in database
-            try:
-                # If payment is successful, update job status to "paid"
-                if payment_status == "SUCCESS":
-                    supabase.table("print_jobs").update({
-                        "status": "paid",
-                        "payment_status": "SUCCESS",
-                        "payment_date": datetime.now().isoformat()
-                    }).eq("order_id", order_id).execute()
-                    
-                    return jsonify({"status": "SUCCESS", "message": "Payment tracked successfully"})
-                else:
-                    # Handle other payment statuses if needed
-                    return jsonify({"status": payment_status, "message": f"Payment status: {payment_status}"})
-                    
-            except Exception as e:
-                print(f"Error updating payment status: {e}")
-                return jsonify({"error": "Database update failed"}), 500
-        
-        return jsonify({"error": "Invalid webhook data"}), 400
-        
-    except Exception as e:
-        print(f"Error processing webhook: {e}")
-        return jsonify({"error": "Webhook processing failed"}), 500
-
-def verify_webhook_signature(webhook_data, signature):
-    """Verify Cashfree webhook signature"""
-    # In a real implementation, you would verify the signature
-    # using your secret key to ensure the webhook is from Cashfree
-    # This is a simplified version
-    return True  # Implement proper verification in production
 
 @app.route("/payment-callback", methods=["GET", "POST"])
 def payment_callback():
@@ -388,7 +313,7 @@ def payment_callback():
         # Verify webhook signature
         signature = request.headers.get("x-webhook-signature")
         webhook_data = request.get_json()
-        
+        print("Received webhook:", webhook_data)
         if not verify_webhook_signature(webhook_data, signature):
             return jsonify({"error": "Invalid signature"}), 401
         
@@ -399,12 +324,13 @@ def payment_callback():
         if order_id and payment_status:
             # Update the order status in database
             try:
-                # If payment is successful, update job status to "paid"
+                # Update payment status
+                
+                
+                # If payment is successful, update job status to "completed"
                 if payment_status == "SUCCESS":
                     supabase.table("print_jobs").update({
-                        "status": "paid",
-                        "payment_status": "SUCCESS",
-                        "payment_date": datetime.now().isoformat()
+                        "status": "completed"
                     }).eq("order_id", order_id).execute()
             except Exception as e:
                 print(f"Error updating payment status: {e}")
@@ -414,6 +340,13 @@ def payment_callback():
     except Exception as e:
         print(f"Error processing webhook: {e}")
         return jsonify({"error": "Webhook processing failed"}), 500
+
+def verify_webhook_signature(webhook_data, signature):
+    """Verify Cashfree webhook signature"""
+    # In a real implementation, you would verify the signature
+    # using your secret key to ensure the webhook is from Cashfree
+    # This is a simplified version
+    return True  # Implement proper verification in production
 
 @app.route("/check-payment-status/<order_id>")
 def check_payment_status(order_id):
