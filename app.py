@@ -23,7 +23,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # --- Cashfree Config ---
 CASHFREE_APP_ID = "1081246de8c8aebb039c1d380b76421801"
 CASHFREE_SECRET_KEY = "cfsk_ma_prod_6c4dd5ba946f5eb8edc06b90e80d8332_642d89ae"
-CASHFREE_ENV = "production"  # or "sandbox" for testing
+CASHFREE_ENV = "sandbox"  # or "sandbox" for testing
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
@@ -300,6 +300,7 @@ def create_payment():
 @app.route("/payment-callback", methods=["GET", "POST"])
 def payment_callback():
     """Handle payment callback from Cashfree"""
+    
     if request.method == "GET":
         # This is the return URL after payment
         order_id = request.args.get("order_id")
@@ -327,7 +328,7 @@ def payment_callback():
                 
                 
                 # If payment is successful, update job status to "completed"
-                if payment_status == "PAID":
+                if payment_status == "SUCCESS":
                     supabase.table("print_jobs").update({
                         "status": "completed"
                     }).eq("order_id", order_id).execute()
