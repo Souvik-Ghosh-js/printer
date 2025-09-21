@@ -52,6 +52,15 @@
       margin-bottom: 40px;
       backdrop-filter: blur(10px);
     }
+    .success-message {
+      background-color: #d4edda;
+      color: #155724;
+      padding: 15px;
+      border-radius: 5px;
+      margin: 15px 0;
+      text-align: center;
+      display: none;
+    }
 
     @media (min-width: 768px) {
       .container {
@@ -268,10 +277,13 @@
   <!-- PDF.js library for mobile devices -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
 </head>
-
 <body>
   <h1>Print With Ease</h1>
   <p class="subtitle">Upload, preview, and confirm your documents with professional-grade accuracy</p>
+
+  <div id="success-message" class="success-message">
+    Payment completed successfully! Your print job has been confirmed.
+  </div>
 
   <div class="container">
     <!-- Form Section -->
@@ -316,6 +328,9 @@
 
       <h3>Total Pages: <span id="total-pages">-</span></h3>
       <h3>Estimated Price: ₹<span id="estimated-price">0.00</span></h3>
+      <div id="pricing-info" class="info-box" style="display: none;">
+        Pricing: First 50 pages - B/W: ₹3/page, Color: ₹7/page. Additional pages - B/W: ₹2/page, Color: ₹5/page.
+      </div>
 
       <div class="controls-row">
         <button id="preview-btn">Preview</button>
@@ -380,6 +395,7 @@
       const previewBox = document.getElementById("preview-box");
       const totalPagesEl = document.getElementById("total-pages");
       const estimatedPriceEl = document.getElementById("estimated-price");
+      const pricingInfoEl = document.getElementById("pricing-info");
       const pagesInput = document.getElementById("pages");
       const pageError = document.getElementById("page-error");
       const uploadResult = document.getElementById("upload-result");
@@ -392,15 +408,41 @@
       const paymentAmount = document.getElementById("payment-amount");
       const paymentForm = document.getElementById("payment-form");
       const closePaymentBtn = document.getElementById("close-payment");
+      const successMessage = document.getElementById("success-message");
+      const uploadForm = document.getElementById("upload-form");
 
       // Set up PDF.js worker
       pdfjsLib = window['pdfjs-dist/build/pdf'];
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
-      // Price calculation (simple example: ₹2 per page for B/W, ₹10 for color)
+      // Price calculation with tiered pricing
       function calculatePrice(pages, colorMode) {
-        const rate = colorMode === 'color' ? 10 : 2;
-        return (pages * rate).toFixed(2);
+        // First 50 pages: B/W ₹3, Color ₹7
+        // Additional pages: B/W ₹2, Color ₹5
+        const basePages = Math.min(pages, 50);
+        const additionalPages = Math.max(pages - 50, 0);
+        
+        const baseRate = colorMode === 'color' ? 7 : 3;
+        const additionalRate = colorMode === 'color' ? 5 : 2;
+        
+        return (basePages * baseRate + additionalPages * additionalRate).toFixed(2);
+      }
+
+      // Reset form to default values
+      function resetForm() {
+        uploadForm.reset();
+        selectedFile = null;
+        jobId = null;
+        totalPages = 0;
+        currentPdf = null;
+        uploadBtn.disabled = true;
+        printBtn.disabled = true;
+        uploadResult.textContent = "";
+        pdfControls.style.display = 'none';
+        estimatedPriceEl.textContent = "0.00";
+        totalPagesEl.textContent = "-";
+        pricingInfoEl.style.display = 'none';
+        previewBox.innerHTML = '<p style="color:#888;">No preview yet.</p>';
       }
 
       fileInput.addEventListener("change", (e) => {
@@ -410,6 +452,7 @@
         uploadResult.textContent = "";
         pdfControls.style.display = 'none';
         estimatedPriceEl.textContent = "0.00";
+        pricingInfoEl.style.display = 'none';
 
         currentPdf = null;
         currentPageNum = 1;
@@ -507,6 +550,7 @@
           // Update estimated price
           const colorMode = form.color_mode.value || "color";
           estimatedPriceEl.textContent = calculatePrice(totalPages, colorMode);
+          pricingInfoEl.style.display = 'block';
 
           const arrayBuffer = await res.arrayBuffer();
           const typedarray = new Uint8Array(arrayBuffer);
@@ -576,6 +620,7 @@
           // Update estimated price
           const colorMode = form.color_mode.value || "color";
           estimatedPriceEl.textContent = calculatePrice(totalPages, colorMode);
+          pricingInfoEl.style.display = 'block';
 
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
@@ -697,10 +742,20 @@
       // Listen for payment success events
       window.addEventListener("message", function(event) {
         if (event.data && event.data.type === "PAYMENT_SUCCESS") {
-          alert("Payment successful! Your print job has been confirmed.");
+          // Show success message
+          successMessage.style.display = "block";
+          
+          // Reset form to default
+          resetForm();
+          
+          // Hide payment modal
           paymentModal.style.display = "none";
           paymentForm.innerHTML = "";
-          // You can redirect to a success page or update UI here
+          
+          // Hide success message after 5 seconds
+          setTimeout(() => {
+            successMessage.style.display = "none";
+          }, 5000);
         } else if (event.data && event.data.type === "PAYMENT_FAILED") {
           alert("Payment failed. Please try again.");
         }

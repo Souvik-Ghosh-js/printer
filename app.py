@@ -15,11 +15,9 @@ import json
 import time
 from datetime import datetime
 
-
-
 # --- Supabase Config ---
 SUPABASE_URL = "https://fgksbxrxskwchjyqxpvx.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZna3NieHJ4c2t3Y2hqeXF4cHZ4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjgxODM5MSwiZXhwIjoyMDcyMzk0MzkxfQ.l5Uujx1rpnVMGCukQtrYDP2n_RcCDMC5mlcCES8rBTc"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhbmFzZSIsInJlZiI6ImZna3NieHJ4c2t3Y2hqeXF4cHZ4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjgxODM5MSwiZXhwIjoyMDcyMzk0MzkxfQ.l5Uujx1rpnVMGCukQtrYDP2n_RcCDMC5mlcCES8rBTc"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Cashfree Config ---
@@ -301,8 +299,6 @@ def create_payment():
     else:
         return jsonify({"error": result["error"]}), 400
 
-# ... (keep your existing payment_callback and check_payment_status routes)
-
 @app.route("/payment-callback", methods=["GET", "POST"])
 def payment_callback():
     """Handle payment callback from Cashfree"""
@@ -329,15 +325,16 @@ def payment_callback():
         if order_id and payment_status:
             # Update the order status in database
             try:
+                # Update payment status
                 supabase.table("print_jobs").update({
                     "payment_status": payment_status,
                     "updated_at": datetime.utcnow().isoformat()
                 }).eq("order_id", order_id).execute()
                 
-                # If payment is successful, update job status
+                # If payment is successful, update job status to "completed"
                 if payment_status == "PAID":
                     supabase.table("print_jobs").update({
-                        "status": "paid"
+                        "status": "completed"
                     }).eq("order_id", order_id).execute()
             except Exception as e:
                 print(f"Error updating payment status: {e}")
