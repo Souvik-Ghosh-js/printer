@@ -228,7 +228,7 @@ def create_cashfree_payment_session(order_id, order_amount, customer_id, custome
         },
         "order_meta": {
             "return_url": return_url,
-            "notify_url": f"{base_url}payment-webhook"
+            "notify_url": f"{base_url}payment-callback"
         }
     }
     
@@ -331,7 +331,7 @@ def payment_callback():
     
     return render_template("index.html", order_id=order_id, status=payment_status)
 
-@app.route("/payment-webhook", methods=["POST"])
+@app.route("/payment-callback", methods=["POST"])
 def payment_webhook():
     """Handle payment webhook from Cashfree"""
     try:
