@@ -358,7 +358,7 @@ def payment_webhook():
         
         # If payment is successful, update job status
         if payment_status == "SUCCESS":
-            update_data["status"] = "completed"
+            update_data["status"] = "confirmed"
             update_data["paid_at"] = datetime.now().isoformat()
             print(f"Payment successful for order {order_id}")
         elif payment_status in ["FAILED", "EXPIRED"]:
