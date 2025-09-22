@@ -308,28 +308,6 @@ def create_payment():
     else:
         return jsonify({"error": result["error"]}), 400
 
-@app.route("/payment-callback", methods=["GET"])
-def payment_callback():
-    """Handle payment return URL (user redirected back after payment)"""
-    order_id = request.args.get("order_id")
-    payment_status = request.args.get("payment_status", "unknown")
-    
-    if order_id:
-        # Update payment status based on callback parameters
-        try:
-            update_data = {
-                "payment_status": payment_status.lower(),
-            }
-            
-            if payment_status.lower() == "success":
-                update_data["status"] = "completed"
-                update_data["paid_at"] = datetime.now().isoformat()
-            
-            supabase.table("print_jobs").update(update_data).eq("order_id", order_id).execute()
-        except Exception as e:
-            print(f"Error updating payment status: {e}")
-    
-    return render_template("index.html", order_id=order_id, status=payment_status)
 
 @app.route("/payment-callback", methods=["POST"])
 def payment_webhook():
@@ -380,11 +358,11 @@ def payment_webhook():
         
         # If payment is successful, update job status
         if payment_status == "SUCCESS":
-            update_data["status"] = "paid"
+            update_data["status"] = "completed"
             update_data["paid_at"] = datetime.now().isoformat()
             print(f"Payment successful for order {order_id}")
         elif payment_status in ["FAILED", "EXPIRED"]:
-            update_data["status"] = "payment_failed"
+            update_data["status"] = "uploaded"
             print(f"Payment failed for order {order_id}")
         
         try:
@@ -458,7 +436,6 @@ def verify_webhook_signature(webhook_data, signature):
         traceback.print_exc()
         return False
     
-
 @app.route("/check-payment-status/<order_id>")
 def check_payment_status(order_id):
     """Check the payment status of an order"""
