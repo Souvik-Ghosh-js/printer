@@ -23,7 +23,8 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # --- Cashfree Config ---
 CASHFREE_APP_ID = "1081246de8c8aebb039c1d380b76421801"
 CASHFREE_SECRET_KEY = "cfsk_ma_prod_6c4dd5ba946f5eb8edc06b90e80d8332_642d89ae"
-CASHFREE_ENV = "production"  # or "sandbox" for testing
+CASHFREE_ENV = "production"
+WEBHOOK_SECRET = "x191i9m9ymo4skygxh2z"
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
@@ -48,11 +49,11 @@ def process_pdf_with_options(file_bytes, orientation, color_mode, page_range_str
                 continue
             if "-" in part:
                 start, end = part.split("-")
-                start = int(start)
-                end = int(end)
+                start = int(start.strip())
+                end = int(end.strip())
                 selected_indices.extend(range(start - 1, end))
             else:
-                selected_indices.append(int(part) - 1)
+                selected_indices.append(int(part.strip()) - 1)
         selected_indices = [i for i in selected_indices if 0 <= i < total_pages]
     else:
         selected_indices = list(range(total_pages))
@@ -70,7 +71,7 @@ def process_pdf_with_options(file_bytes, orientation, color_mode, page_range_str
         # Define transformation matrix for rotation if needed
         mat = fitz.Matrix(1, 1)
         if orientation == "landscape":
-            mat = mat * fitz.Matrix(0, 1, -1, 0, rect.width, 0)
+            mat = fitz.Matrix(0, 1, -1, 0, rect.width, 0)
         
         # Render the page to a pixmap with color conversion if needed
         if color_mode == "bw":
@@ -144,13 +145,13 @@ def upload_pdf():
     page_range_str = request.form.get("pages", "").strip()
     orientation = request.form.get("orientation", "portrait")
     color_mode = request.form.get("color_mode", "color")
+    price = request.form.get("price", "0.00")
 
     try:
         # Process PDF with all options (same as preview)
         filtered_pdf_bytes, total_pages = process_pdf_with_options(
             file_bytes, orientation, color_mode, page_range_str
         )
-
     except Exception as e:
         print(f"[WARN] PDF processing failed: {e}")
         # Fallback: use original file without processing
@@ -164,10 +165,9 @@ def upload_pdf():
     except Exception as e:
         return jsonify({"error": "Storage upload failed", "detail": str(e)}), 500
 
-    # gather settings & store in DB
-    sides = request.form.get("sides")
-    paper_size = request.form.get("paper_size")
-    price = request.form.get("price", "0.00")
+    # Gather settings & store in DB
+    sides = request.form.get("sides", "single")
+    paper_size = request.form.get("paper_size", "A4")
 
     job_payload = {
         "customer_id": customer_id,
@@ -180,27 +180,26 @@ def upload_pdf():
         "color_mode": color_mode,
         "paper_size": paper_size,
         "page_range": page_range_str,
-        "price": price
+        "price": price,
+        "payment_status": "pending",
+        "created_at": datetime.now().isoformat()
     }
 
     try:
         job = supabase.table("print_jobs").insert(job_payload).execute()
+        created = job.data[0] if job.data else None
+        
+        if created:
+            return jsonify({
+                "job_id": created.get("id"),
+                "file_url": file_url,
+                "total_pages": total_pages
+            })
+        else:
+            return jsonify({"error": "Failed to create job"}), 500
+            
     except Exception as e:
         return jsonify({"error": "DB insert failed", "detail": str(e)}), 500
-
-    try:
-        created = job.data[0]
-        return jsonify({
-            "job_id": created.get("id"),
-            "file_url": file_url,
-            "total_pages": total_pages
-        })
-    except Exception:
-        return jsonify({
-            "job": job.data,
-            "file_url": file_url,
-            "total_pages": total_pages
-        })
 
 def create_cashfree_payment_session(order_id, order_amount, customer_id, customer_email, customer_phone):
     """Create a payment session with Cashfree"""
@@ -213,17 +212,13 @@ def create_cashfree_payment_session(order_id, order_amount, customer_id, custome
         "x-client-secret": CASHFREE_SECRET_KEY
     }
     
-    # Generate a unique order ID if not provided
-    if not order_id:
-        order_id = f"ORDER_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-    
     # Ensure we're using HTTPS for the return URL
     base_url = request.url_root.replace('http://', 'https://')
-    return_url = f"{base_url}payment-callback?order_id={order_id}"
+    return_url = f"{base_url}payment-callback"
     
     payload = {
         "order_id": order_id,
-        "order_amount": order_amount,
+        "order_amount": float(order_amount),
         "order_currency": "INR",
         "order_note": "Print job payment",
         "customer_details": {
@@ -232,7 +227,8 @@ def create_cashfree_payment_session(order_id, order_amount, customer_id, custome
             "customer_phone": customer_phone
         },
         "order_meta": {
-            "return_url": return_url  # This will now be HTTPS
+            "return_url": return_url,
+            "notify_url": f"{base_url}payment-webhook"
         }
     }
     
@@ -247,16 +243,17 @@ def create_cashfree_payment_session(order_id, order_amount, customer_id, custome
                 "order_id": order_id
             }
         else:
+            print(f"Cashfree API error: {response.status_code} - {response_data}")
             return {
                 "success": False,
                 "error": response_data.get("message", "Unknown error from Cashfree")
             }
     except Exception as e:
+        print(f"Cashfree API exception: {e}")
         return {
             "success": False,
             "error": str(e)
         }
-
 
 @app.route("/create-payment", methods=["POST"])
 def create_payment():
@@ -268,74 +265,132 @@ def create_payment():
     if not job_id:
         return jsonify({"error": "Job ID is required"}), 400
     
+    # Get job details from database
+    try:
+        job_result = supabase.table("print_jobs").select("*").eq("id", job_id).execute()
+        if not job_result.data:
+            return jsonify({"error": "Job not found"}), 404
+        
+        job = job_result.data[0]
+        customer_id = job.get("customer_id", "customer_123")
+        
+    except Exception as e:
+        print(f"Error fetching job: {e}")
+        customer_id = "customer_123"
+    
     # Generate a unique order ID
     order_id = f"JOB_{job_id}_{int(time.time())}"
     
     # Create payment session with Cashfree
-    # In a real app, you would get customer details from your database
     result = create_cashfree_payment_session(
         order_id=order_id,
         order_amount=price,
-        customer_id="customer_123",  # Replace with actual customer ID
-        customer_email="customer@example.com",  # Replace with actual email
-        customer_phone="9999999999"  # Replace with actual phone
+        customer_id=customer_id,
+        customer_email="customer@example.com",  # You should collect this from users
+        customer_phone="9999999999"  # You should collect this from users
     )
     
     if result["success"]:
         # Update the job with order ID
         try:
             supabase.table("print_jobs").update({
-                "status": "uploaded"
+                "order_id": order_id,
+                "payment_status": "pending",
             }).eq("id", job_id).execute()
         except Exception as e:
             print(f"Error updating job with order ID: {e}")
         
         return jsonify({
             "payment_session_id": result["payment_session_id"],
+            "order_id": order_id,
             "mode": CASHFREE_ENV
         })
     else:
         return jsonify({"error": result["error"]}), 400
 
-@app.route("/payment-callback", methods=["GET", "POST"])
+@app.route("/payment-callback", methods=["GET"])
 def payment_callback():
-    """Handle payment callback from Cashfree"""
+    """Handle payment return URL (user redirected back after payment)"""
+    order_id = request.args.get("order_id")
+    payment_status = request.args.get("payment_status", "unknown")
     
-    if request.method == "GET":
-        # This is the return URL after payment
-        order_id = request.args.get("order_id")
-        if order_id:
-            return render_template("payment_status.html", order_id=order_id)
-        return jsonify({"message": "Payment callback received"})
+    if order_id:
+        # Update payment status based on callback parameters
+        try:
+            update_data = {
+                "payment_status": payment_status.lower(),
+            }
+            
+            if payment_status.lower() == "success":
+                update_data["status"] = "completed"
+                update_data["paid_at"] = datetime.now().isoformat()
+            
+            supabase.table("print_jobs").update(update_data).eq("order_id", order_id).execute()
+        except Exception as e:
+            print(f"Error updating payment status: {e}")
     
-    # Handle webhook POST request
+    return render_template("index.html", order_id=order_id, status=payment_status)
+
+@app.route("/payment-webhook", methods=["POST"])
+def payment_webhook():
+    """Handle payment webhook from Cashfree"""
     try:
+        # Get webhook data
+        webhook_data = request.get_json()
+        if not webhook_data:
+            return jsonify({"error": "No webhook data received"}), 400
+        
+        print("Received webhook:", json.dumps(webhook_data, indent=2))
+        
         # Verify webhook signature
         signature = request.headers.get("x-webhook-signature")
-        webhook_data = request.get_json()
-        print("Received webhook:", webhook_data)
         if not verify_webhook_signature(webhook_data, signature):
+            print("Invalid webhook signature" , signature)
             return jsonify({"error": "Invalid signature"}), 401
         
-        # Process webhook data
-        order_id = webhook_data.get("order", {}).get("order_id")
-        payment_status = webhook_data.get("order", {}).get("order_status")
+        # Extract order information
+        order_info = webhook_data.get("data", {}).get("order", {}) or webhook_data.get("order", {})
+        order_id = order_info.get("order_id")
+        payment_status = order_info.get("order_status")
+        transaction_id = order_info.get("transaction_id")
+        payment_amount = order_info.get("order_amount")
         
-        if order_id and payment_status:
-            # Update the order status in database
-            try:
-                # Update payment status
-                
-                
-                # If payment is successful, update job status to "completed"
-                if payment_status == "SUCCESS":
-                    supabase.table("print_jobs").update({
-                        "status": "completed"
-                    }).eq("order_id", order_id).execute()
-            except Exception as e:
-                print(f"Error updating payment status: {e}")
+        if not order_id or not payment_status:
+            return jsonify({"error": "Missing order_id or order_status"}), 400
         
-        return jsonify({"status": "success"})
+        print(f"Processing order {order_id} with status: {payment_status}")
+        
+        # Update the order status in database
+        update_data = {
+            "payment_status": payment_status.lower(),
+        }
+        
+        # Add transaction ID if available
+        if transaction_id:
+            update_data["transaction_id"] = transaction_id
+        
+        # If payment is successful, update job status
+        if payment_status.upper() == "PAID":
+            update_data["status"] = "paid"
+            update_data["paid_at"] = datetime.now().isoformat()
+        elif payment_status.upper() in ["FAILED", "EXPIRED"]:
+            update_data["status"] = "payment_failed"
+        
+        try:
+            # Update the print job in database
+            result = supabase.table("print_jobs").update(update_data).eq("order_id", order_id).execute()
+            
+            if len(result.data) == 0:
+                print(f"Order {order_id} not found in database")
+                return jsonify({"error": "Order not found"}), 404
+                
+            print(f"Successfully updated order {order_id} with status {payment_status}")
+            
+        except Exception as e:
+            print(f"Error updating database for order {order_id}: {e}")
+            return jsonify({"error": "Database update failed"}), 500
+        
+        return jsonify({"status": "success", "message": "Webhook processed successfully"})
     
     except Exception as e:
         print(f"Error processing webhook: {e}")
@@ -343,17 +398,33 @@ def payment_callback():
 
 def verify_webhook_signature(webhook_data, signature):
     """Verify Cashfree webhook signature"""
-    # In a real implementation, you would verify the signature
-    # using your secret key to ensure the webhook is from Cashfree
-    # This is a simplified version
-    return True  # Implement proper verification in production
+    if not signature:
+        return False
+    
+    try:
+        # Convert webhook data to string and encode
+        webhook_body = json.dumps(webhook_data, separators=(',', ':'), sort_keys=True)
+        webhook_body_bytes = webhook_body.encode('utf-8')
+        
+        # Compute HMAC SHA256 signature
+        computed_signature = hmac.new(
+            key=WEBHOOK_SECRET.encode('utf-8'),
+            msg=webhook_body_bytes,
+            digestmod=hashlib.sha256
+        ).hexdigest()
+        
+        # Compare signatures
+        return hmac.compare_digest(computed_signature, signature)
+    except Exception as e:
+        print(f"Error verifying signature: {e}")
+        return False
 
 @app.route("/check-payment-status/<order_id>")
 def check_payment_status(order_id):
     """Check the payment status of an order"""
     try:
         # Get order details from database
-        result = supabase.table("print_jobs").select("payment_status, status").eq("order_id", order_id).execute()
+        result = supabase.table("print_jobs").select("payment_status, status, order_id").eq("order_id", order_id).execute()
         
         if result.data:
             payment_status = result.data[0].get("payment_status", "unknown")
