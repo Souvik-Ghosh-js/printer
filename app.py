@@ -331,7 +331,7 @@ def payment_callback():
     
     return render_template("index.html", order_id=order_id, status=payment_status)
 
-@app.route("/razorpay/webhook", methods=["POST"])
+@app.route("/payment-webhook", methods=["POST"])
 def payment_webhook():
     """Handle payment webhook from Cashfree"""
     try:
