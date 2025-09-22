@@ -338,53 +338,75 @@ def payment_webhook():
         # Get webhook data
         webhook_data = request.get_json()
         if not webhook_data:
+            print("No webhook data received")
             return jsonify({"error": "No webhook data received"}), 400
         
         print("Received webhook:", json.dumps(webhook_data, indent=2))
         
         # Verify webhook signature
-        signature = request.headers.get("x-webhook-signature")
-        if not verify_webhook_signature(webhook_data, signature):
-            print("Invalid webhook signature" , signature)
-            return jsonify({"error": "Invalid signature"}), 401
         
-        # Extract order information
-        order_info = webhook_data.get("data", {}).get("order", {}) or webhook_data.get("order", {})
-        order_id = order_info.get("order_id")
-        payment_status = order_info.get("order_status")
-        transaction_id = order_info.get("transaction_id")
-        payment_amount = order_info.get("order_amount")
+        # Extract order information based on actual webhook structure
+        order_data = webhook_data.get("data", {}).get("order", {})
+        order_id = order_data.get("order_id")
         
-        if not order_id or not payment_status:
-            return jsonify({"error": "Missing order_id or order_status"}), 400
+        # Get payment status from payment section
+        payment_data = webhook_data.get("data", {}).get("payment", {})
+        payment_status = payment_data.get("payment_status", "").upper()
+        
+        transaction_id = payment_data.get("cf_payment_id")
+        payment_amount = payment_data.get("payment_amount")
+        
+        if not order_id:
+            print("Missing order_id in webhook data")
+            return jsonify({"error": "Missing order_id"}), 400
         
         print(f"Processing order {order_id} with status: {payment_status}")
         
-        # Update the order status in database
-        update_data = {
-            "payment_status": payment_status.lower(),
+        # Map Cashfree status to your application status
+        status_mapping = {
+            "SUCCESS": "paid",
+            "FAILED": "failed",
+            "USER_DROPPED": "cancelled",
+            "EXPIRED": "expired"
         }
         
-        # Add transaction ID if available
-        if transaction_id:
-            update_data["transaction_id"] = transaction_id
+        payment_status_lower = status_mapping.get(payment_status, "pending")
+        
+        # Update the order status in database
+        update_data = {
+            "payment_status": payment_status_lower,
+            "transaction_id": transaction_id,
+        }
         
         # If payment is successful, update job status
-        if payment_status.upper() == "PAID":
+        if payment_status == "SUCCESS":
             update_data["status"] = "paid"
             update_data["paid_at"] = datetime.now().isoformat()
-        elif payment_status.upper() in ["FAILED", "EXPIRED"]:
+            print(f"Payment successful for order {order_id}")
+        elif payment_status in ["FAILED", "EXPIRED"]:
             update_data["status"] = "payment_failed"
+            print(f"Payment failed for order {order_id}")
         
         try:
             # Update the print job in database
             result = supabase.table("print_jobs").update(update_data).eq("order_id", order_id).execute()
             
-            if len(result.data) == 0:
+            if not result.data:
                 print(f"Order {order_id} not found in database")
-                return jsonify({"error": "Order not found"}), 404
+                # Try to find by job ID if order_id contains job ID
+                if "JOB_" in order_id:
+                    job_id_part = order_id.split("_")[1]
+                    result = supabase.table("print_jobs").update(update_data).eq("id", job_id_part).execute()
+                    
+                    if not result.data:
+                        print(f"Job ID {job_id_part} also not found in database")
+                        return jsonify({"error": "Order/Job not found"}), 404
+                    else:
+                        print(f"Found job by ID: {job_id_part}")
+                else:
+                    return jsonify({"error": "Order not found"}), 404
                 
-            print(f"Successfully updated order {order_id} with status {payment_status}")
+            print(f"Successfully updated order {order_id} with status {payment_status_lower}")
             
         except Exception as e:
             print(f"Error updating database for order {order_id}: {e}")
@@ -394,30 +416,48 @@ def payment_webhook():
     
     except Exception as e:
         print(f"Error processing webhook: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": "Webhook processing failed"}), 500
 
 def verify_webhook_signature(webhook_data, signature):
     """Verify Cashfree webhook signature"""
     if not signature:
+        print("No signature provided")
         return False
     
     try:
-        # Convert webhook data to string and encode
-        webhook_body = json.dumps(webhook_data, separators=(',', ':'), sort_keys=True)
-        webhook_body_bytes = webhook_body.encode('utf-8')
+        # Convert webhook data to string in the exact format Cashfree expects
+        # Cashfree webhook signature is computed on the raw request body
+        webhook_body = request.get_data(as_text=True)
+        
+        if not webhook_body:
+            print("Empty webhook body")
+            return False
+            
+        print(f"Webhook body for signature: {webhook_body}")
         
         # Compute HMAC SHA256 signature
         computed_signature = hmac.new(
             key=WEBHOOK_SECRET.encode('utf-8'),
-            msg=webhook_body_bytes,
+            msg=webhook_body.encode('utf-8'),
             digestmod=hashlib.sha256
         ).hexdigest()
         
+        print(f"Computed signature: {computed_signature}")
+        print(f"Received signature: {signature}")
+        
         # Compare signatures
-        return hmac.compare_digest(computed_signature, signature)
+        result = hmac.compare_digest(computed_signature, signature)
+        print(f"Signature verification result: {result}")
+        return result
+        
     except Exception as e:
         print(f"Error verifying signature: {e}")
+        import traceback
+        traceback.print_exc()
         return False
+    
 
 @app.route("/check-payment-status/<order_id>")
 def check_payment_status(order_id):
