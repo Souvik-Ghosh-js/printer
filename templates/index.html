@@ -359,7 +359,7 @@
     </div>
   </div>
 
- <script>
+<script>
     (function () {
         function isMobile() {
             return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -377,6 +377,7 @@
         let currentPageNum = 1;
         let pdfRendering = false;
         let pdfRenderQueue = null;
+        let paymentCheckInterval = null;
 
         const fileInput = document.querySelector('input[name="file"]');
         const previewBtn = document.getElementById("preview-btn");
@@ -435,6 +436,75 @@
             totalPagesEl.textContent = "-";
             pricingInfoEl.style.display = 'none';
             previewBox.innerHTML = '<p style="color:#888;">No preview yet.</p>';
+            
+            // Clear any existing intervals
+            if (paymentCheckInterval) {
+                clearInterval(paymentCheckInterval);
+                paymentCheckInterval = null;
+            }
+        }
+
+        // Function to check payment status
+        async function checkPaymentStatus(orderId) {
+            try {
+                const response = await fetch(`/check-payment-status/${orderId}`);
+                const data = await response.json();
+                
+                if (data.payment_status === 'paid' || data.payment_status === 'success') {
+                    // Payment successful
+                    handlePaymentSuccess();
+                    return true;
+                } else if (data.payment_status === 'failed' || data.payment_status === 'expired') {
+                    // Payment failed
+                    alert('Payment failed. Please try again.');
+                    return true;
+                }
+                return false;
+            } catch (error) {
+                console.error('Error checking payment status:', error);
+                return false;
+            }
+        }
+
+        // Function to handle successful payment
+        function handlePaymentSuccess() {
+            // Show success message
+            successMessage.style.display = "block";
+            
+            // Reset form to default
+            resetForm();
+            
+            // Hide payment modal
+            paymentModal.style.display = "none";
+            paymentForm.innerHTML = "";
+            
+            // Clear any existing intervals
+            if (paymentCheckInterval) {
+                clearInterval(paymentCheckInterval);
+                paymentCheckInterval = null;
+            }
+            
+            // Hide success message after 5 seconds
+            setTimeout(() => {
+                successMessage.style.display = "none";
+            }, 5000);
+        }
+
+        // Function to start payment status polling
+        function startPaymentStatusPolling(orderId) {
+            // Clear any existing interval first
+            if (paymentCheckInterval) {
+                clearInterval(paymentCheckInterval);
+            }
+            
+            // Start polling for payment status
+            paymentCheckInterval = setInterval(async () => {
+                const paymentCompleted = await checkPaymentStatus(orderId);
+                if (paymentCompleted) {
+                    clearInterval(paymentCheckInterval);
+                    paymentCheckInterval = null;
+                }
+            }, 3000); // Check every 3 seconds
         }
 
         fileInput.addEventListener("change", (e) => {
@@ -705,6 +775,12 @@
                     paymentAmount.textContent = price;
                     paymentModal.style.display = "block";
                     
+                    // Store order ID for status checking
+                    const orderId = data.order_id;
+                    
+                    // Start polling for payment status
+                    startPaymentStatusPolling(orderId);
+                    
                     // Initialize Cashfree checkout
                     const cashfree = new Cashfree({ mode: "production" });
                     
@@ -726,32 +802,47 @@
         closePaymentBtn.addEventListener("click", function() {
             paymentModal.style.display = "none";
             paymentForm.innerHTML = "";
-        });
-
-        // Listen for payment success events
-        window.addEventListener("message", function(event) {
-            if (event.data && event.data.type === "PAYMENT_SUCCESS") {
-                // Show success message
-                successMessage.style.display = "block";
-                
-                // Reset form to default
-                resetForm();
-                
-                // Hide payment modal
-                paymentModal.style.display = "none";
-                paymentForm.innerHTML = "";
-                
-                // Hide success message after 5 seconds
-                setTimeout(() => {
-                    successMessage.style.display = "none";
-                }, 5000);
-            } else if (event.data && event.data.type === "PAYMENT_FAILED") {
-                alert("Payment failed. Please try again.");
+            
+            // Clear payment status polling when modal is closed manually
+            if (paymentCheckInterval) {
+                clearInterval(paymentCheckInterval);
+                paymentCheckInterval = null;
             }
         });
 
+        // Listen for payment success events from Cashfree SDK
+        window.addEventListener("message", function(event) {
+            if (event.data && event.data.type === "PAYMENT_SUCCESS") {
+                handlePaymentSuccess();
+            } else if (event.data && event.data.type === "PAYMENT_FAILED") {
+                alert("Payment failed. Please try again.");
+                
+                // Stop polling if payment failed
+                if (paymentCheckInterval) {
+                    clearInterval(paymentCheckInterval);
+                    paymentCheckInterval = null;
+                }
+            }
+        });
+
+        // Also check URL parameters for payment status (in case of redirect)
+        function checkUrlForPaymentStatus() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const paymentStatus = urlParams.get('payment_status');
+            const orderId = urlParams.get('order_id');
+            
+            if (paymentStatus === 'success' && orderId) {
+                handlePaymentSuccess();
+                
+                // Clean URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+        }
+
+        // Check URL parameters on page load
+        checkUrlForPaymentStatus();
+
     })();
 </script>
-
 </body>
 </html>
