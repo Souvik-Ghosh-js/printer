@@ -5,8 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PDF Print Job Portal</title>
-<!-- ADD this -->
-<script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
+  <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
   <style>
     /* ---------- GLOBAL THEME ---------- */
     body {
@@ -292,21 +291,12 @@
         <label>Choose PDF</label>
         <input type="file" name="file" accept="application/pdf" required>
 
-        
-
         <label>Orientation</label>
         <select name="orientation">
           <option value="portrait">Portrait</option>
           <option value="landscape">Landscape</option>
         </select>
 
-        <label>Color</label>
-        <select name="color_mode">
-          <option value="bw">Black & White</option>
-          <option value="color">Color</option>
-        </select>
-
-     
         <label>Page range</label>
         <input type="text" name="pages" id="pages" placeholder="e.g. 1-3,5 or 2,4,6">
         <div id="page-error" class="error-text">Invalid page range (use numbers and ranges, e.g. 1,3,5-7)</div>
@@ -318,8 +308,8 @@
 
       <h3>Total Pages: <span id="total-pages">-</span></h3>
       <h3>Estimated Price: ₹<span id="estimated-price">0.00</span></h3>
-      <div id="pricing-info" class="info-box" style="display: none;">
-        Pricing: First 50 pages - B/W: ₹3/page, Color: ₹7/page. Additional pages - B/W: ₹2/page, Color: ₹5/page.
+      <div id="pricing-info" class="info-box">
+        Pricing: First 50 pages - ₹3/page. Additional pages - ₹2/page.
       </div>
 
       <div class="controls-row">
@@ -406,17 +396,17 @@
         pdfjsLib = window['pdfjs-dist/build/pdf'];
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
-        // Price calculation with tiered pricing
-        function calculatePrice(pages, colorMode) {
+        // Price calculation with tiered pricing (B/W only)
+        function calculatePrice(pages) {
             if (!pages || pages <= 0) return "0.00";
             
-            // First 50 pages: B/W ₹3, Color ₹7
-            // Additional pages: B/W ₹2, Color ₹5
+            // First 50 pages: ₹3/page
+            // Additional pages: ₹2/page
             const basePages = Math.min(pages, 50);
             const additionalPages = Math.max(pages - 50, 0);
             
-            const baseRate = colorMode === 'color' ? 7 : 3;
-            const additionalRate = colorMode === 'color' ? 5 : 2;
+            const baseRate = 3;  // B/W rate
+            const additionalRate = 2;  // B/W rate for additional pages
             
             return (basePages * baseRate + additionalPages * additionalRate).toFixed(2);
         }
@@ -434,7 +424,6 @@
             pdfControls.style.display = 'none';
             estimatedPriceEl.textContent = "0.00";
             totalPagesEl.textContent = "-";
-            pricingInfoEl.style.display = 'none';
             previewBox.innerHTML = '<p style="color:#888;">No preview yet.</p>';
             
             // Clear any existing intervals
@@ -514,7 +503,6 @@
             uploadResult.textContent = "";
             pdfControls.style.display = 'none';
             estimatedPriceEl.textContent = "0.00";
-            pricingInfoEl.style.display = 'none';
 
             currentPdf = null;
             currentPageNum = 1;
@@ -593,7 +581,6 @@
                 const fd = new FormData();
                 fd.append("file", file);
                 fd.append("orientation", form.orientation.value || "portrait");
-                fd.append("color_mode", form.color_mode.value || "color");
                 fd.append("pages", pagesInput.value.trim());
 
                 previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Loading PDF...</p></div>`;
@@ -609,10 +596,8 @@
                 totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
                 totalPagesEl.textContent = totalPages || "-";
                 
-                // Update estimated price
-                const colorMode = form.color_mode.value || "color";
-                estimatedPriceEl.textContent = calculatePrice(totalPages, colorMode);
-                pricingInfoEl.style.display = 'block';
+                // Update estimated price (B/W only)
+                estimatedPriceEl.textContent = calculatePrice(totalPages);
 
                 const arrayBuffer = await res.arrayBuffer();
                 const typedarray = new Uint8Array(arrayBuffer);
@@ -664,7 +649,6 @@
             const fd = new FormData();
             fd.append("file", selectedFile);
             fd.append("orientation", form.orientation.value || "portrait");
-            fd.append("color_mode", form.color_mode.value || "color");
             fd.append("pages", pagesInput.value.trim());
 
             previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Generating preview...</p></div>`;
@@ -679,10 +663,8 @@
                 totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
                 totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
                 
-                // Update estimated price
-                const colorMode = form.color_mode.value || "color";
-                estimatedPriceEl.textContent = calculatePrice(totalPages, colorMode);
-                pricingInfoEl.style.display = 'block';
+                // Update estimated price (B/W only)
+                estimatedPriceEl.textContent = calculatePrice(totalPages);
 
                 const blob = await res.blob();
                 const url = URL.createObjectURL(blob);
@@ -713,14 +695,12 @@
             fd.append("file", selectedFile);
             fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
             fd.append("orientation", form.orientation.value);
-            fd.append("color_mode", form.color_mode.value);
             fd.append("pages", pagesVal);
             fd.append("sides", "single");
             fd.append("paper_size", "A4");
 
-            // Calculate price based on pages and color mode
-            const colorMode = form.color_mode.value || "color";
-            const price = calculatePrice(totalPages, colorMode);
+            // Calculate price based on pages (B/W only)
+            const price = calculatePrice(totalPages);
             fd.append("price", price);
 
             uploadResult.textContent = "Uploading...";
@@ -751,9 +731,7 @@
         printBtn.addEventListener("click", async () => {
             if (!jobId) return alert("Please upload and create a job first.");
 
-            const form = document.getElementById("upload-form");
-            const colorMode = form.color_mode.value || "color";
-            const price = calculatePrice(totalPages, colorMode);
+            const price = calculatePrice(totalPages);
             
             const payload = {
                 job_id: jobId,
