@@ -309,7 +309,7 @@
       <h3>Total Pages: <span id="total-pages">-</span></h3>
       <h3>Estimated Price: ₹<span id="estimated-price">0.00</span></h3>
       <div id="pricing-info" class="info-box">
-        Pricing: First 50 pages - ₹3/page. Additional pages - ₹2/page.
+        Pricing: 4 or fewer pages - ₹3 per page. More than 4 pages - ₹2 per page.
       </div>
 
       <div class="controls-row">
@@ -396,19 +396,17 @@
         pdfjsLib = window['pdfjs-dist/build/pdf'];
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
-        // Price calculation with tiered pricing (B/W only)
+        // CORRECTED PRICING LOGIC: 
+        // 4 or fewer pages: ₹3 per page
+        // More than 4 pages: ₹2 per page
         function calculatePrice(pages) {
             if (!pages || pages <= 0) return "0.00";
             
-            // First 50 pages: ₹3/page
-            // Additional pages: ₹2/page
-            const basePages = Math.min(pages, 50);
-            const additionalPages = Math.max(pages - 50, 0);
+            // 4 or fewer pages: ₹3 per page
+            // More than 4 pages: ₹2 per page
+            const rate = pages <= 4 ? 3 : 2;
             
-            const baseRate = 3;  // B/W rate
-            const additionalRate = 2;  // B/W rate for additional pages
-            
-            return (basePages * baseRate + additionalPages * additionalRate).toFixed(2);
+            return (pages * rate).toFixed(2);
         }
 
         // Reset form to default values
@@ -596,7 +594,7 @@
                 totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
                 totalPagesEl.textContent = totalPages || "-";
                 
-                // Update estimated price (B/W only)
+                // Update estimated price with corrected pricing logic
                 estimatedPriceEl.textContent = calculatePrice(totalPages);
 
                 const arrayBuffer = await res.arrayBuffer();
@@ -663,7 +661,7 @@
                 totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
                 totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
                 
-                // Update estimated price (B/W only)
+                // Update estimated price with corrected pricing logic
                 estimatedPriceEl.textContent = calculatePrice(totalPages);
 
                 const blob = await res.blob();
@@ -699,7 +697,7 @@
             fd.append("sides", "single");
             fd.append("paper_size", "A4");
 
-            // Calculate price based on pages (B/W only)
+            // Calculate price based on pages with corrected pricing logic
             const price = calculatePrice(totalPages);
             fd.append("price", price);
 
