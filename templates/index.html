@@ -51,6 +51,7 @@
       margin-bottom: 40px;
       backdrop-filter: blur(10px);
     }
+
     .success-message {
       background-color: #d4edda;
       color: #155724;
@@ -276,6 +277,7 @@
   <!-- PDF.js library for mobile devices -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
 </head>
+
 <body>
   <h1>Mohini Print Shop</h1>
   <p class="subtitle">Upload, preview, and confirm your documents with professional-grade accuracy</p>
@@ -339,486 +341,506 @@
   </div>
 
   <!-- Payment Modal -->
-  <div id="payment-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
-    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 10px; width: 90%; max-width: 500px;">
+  <div id="payment-modal"
+    style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+    <div
+      style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 10px; width: 90%; max-width: 500px;">
       <h2>Complete Payment</h2>
       <p>Job ID: <span id="payment-job-id"></span></p>
       <p>Total Amount: ₹<span id="payment-amount"></span></p>
       <div id="payment-form"></div>
-      <button id="close-payment" style="margin-top: 20px; padding: 10px; background: #e74c3c; color: white; border: none; border-radius: 5px; cursor: pointer;">Cancel</button>
+      <button id="close-payment"
+        style="margin-top: 20px; padding: 10px; background: #e74c3c; color: white; border: none; border-radius: 5px; cursor: pointer;">Cancel</button>
     </div>
   </div>
 
-<script>
+  <script>
     (function () {
-        function isMobile() {
-            return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      function isMobile() {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      }
+
+      const isMobileDevice = isMobile();
+      if (isMobileDevice) {
+        document.getElementById('mobile-alert').style.display = 'block';
+      }
+
+      let selectedFile = null;
+      let jobId = null;
+      let totalPages = 0;
+      let currentPdf = null;
+      let currentPageNum = 1;
+      let pdfRendering = false;
+      let pdfRenderQueue = null;
+      let paymentCheckInterval = null;
+
+      const fileInput = document.querySelector('input[name="file"]');
+      const previewBtn = document.getElementById("preview-btn");
+      const uploadBtn = document.getElementById("upload-btn");
+      const printBtn = document.getElementById("print-btn");
+      const previewBox = document.getElementById("preview-box");
+      const totalPagesEl = document.getElementById("total-pages");
+      const estimatedPriceEl = document.getElementById("estimated-price");
+      const pricingInfoEl = document.getElementById("pricing-info");
+      const pagesInput = document.getElementById("pages");
+      const pageError = document.getElementById("page-error");
+      const uploadResult = document.getElementById("upload-result");
+      const pdfControls = document.getElementById("pdf-controls");
+      const prevPageBtn = document.getElementById("prev-page");
+      const nextPageBtn = document.getElementById("next-page");
+      const pageNumSpan = document.getElementById("page-num");
+      const paymentModal = document.getElementById("payment-modal");
+      const paymentJobId = document.getElementById("payment-job-id");
+      const paymentAmount = document.getElementById("payment-amount");
+      const paymentForm = document.getElementById("payment-form");
+      const closePaymentBtn = document.getElementById("close-payment");
+      const successMessage = document.getElementById("success-message");
+      const uploadForm = document.getElementById("upload-form");
+
+      // Set up PDF.js worker
+      pdfjsLib = window['pdfjs-dist/build/pdf'];
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+      // CORRECTED PRICING LOGIC: 
+      // 4 or fewer pages: ₹3 per page
+      // More than 4 pages: ₹2 per page
+      function calculatePrice(totalPages, highBlackPages = 0) {
+        if (!totalPages || totalPages <= 0) return "0.00";
+
+        // Base pricing for ALL pages: 4 or fewer pages - ₹3 per page, More than 4 pages - ₹2 per page
+        const baseRate = totalPages <= 4 ? 3 : 2;
+        const basePrice = totalPages * baseRate;
+
+        // Additional ₹2 per high black page
+        const highBlackCharge = highBlackPages * 2;
+
+        return (basePrice + highBlackCharge).toFixed(2);
+      }
+
+
+      // Reset form to default values
+      function resetForm() {
+        uploadForm.reset();
+        selectedFile = null;
+        jobId = null;
+        totalPages = 0;
+        currentPdf = null;
+        uploadBtn.disabled = true;
+        printBtn.disabled = true;
+        uploadResult.textContent = "";
+        pdfControls.style.display = 'none';
+        estimatedPriceEl.textContent = "0.00";
+        totalPagesEl.textContent = "-";
+        previewBox.innerHTML = '<p style="color:#888;">No preview yet.</p>';
+
+        // Clear any existing intervals
+        if (paymentCheckInterval) {
+          clearInterval(paymentCheckInterval);
+          paymentCheckInterval = null;
         }
+      }
 
-        const isMobileDevice = isMobile();
-        if (isMobileDevice) {
-            document.getElementById('mobile-alert').style.display = 'block';
-        }
+      // Function to check payment status
+      async function checkPaymentStatus(orderId) {
+        try {
+          const response = await fetch(`/check-payment-status/${orderId}`);
+          const data = await response.json();
 
-        let selectedFile = null;
-        let jobId = null;
-        let totalPages = 0;
-        let currentPdf = null;
-        let currentPageNum = 1;
-        let pdfRendering = false;
-        let pdfRenderQueue = null;
-        let paymentCheckInterval = null;
-
-        const fileInput = document.querySelector('input[name="file"]');
-        const previewBtn = document.getElementById("preview-btn");
-        const uploadBtn = document.getElementById("upload-btn");
-        const printBtn = document.getElementById("print-btn");
-        const previewBox = document.getElementById("preview-box");
-        const totalPagesEl = document.getElementById("total-pages");
-        const estimatedPriceEl = document.getElementById("estimated-price");
-        const pricingInfoEl = document.getElementById("pricing-info");
-        const pagesInput = document.getElementById("pages");
-        const pageError = document.getElementById("page-error");
-        const uploadResult = document.getElementById("upload-result");
-        const pdfControls = document.getElementById("pdf-controls");
-        const prevPageBtn = document.getElementById("prev-page");
-        const nextPageBtn = document.getElementById("next-page");
-        const pageNumSpan = document.getElementById("page-num");
-        const paymentModal = document.getElementById("payment-modal");
-        const paymentJobId = document.getElementById("payment-job-id");
-        const paymentAmount = document.getElementById("payment-amount");
-        const paymentForm = document.getElementById("payment-form");
-        const closePaymentBtn = document.getElementById("close-payment");
-        const successMessage = document.getElementById("success-message");
-        const uploadForm = document.getElementById("upload-form");
-
-        // Set up PDF.js worker
-        pdfjsLib = window['pdfjs-dist/build/pdf'];
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
-
-        // CORRECTED PRICING LOGIC: 
-        // 4 or fewer pages: ₹3 per page
-        // More than 4 pages: ₹2 per page
-        function calculatePrice(pages) {
-            if (!pages || pages <= 0) return "0.00";
-            
-            // 4 or fewer pages: ₹3 per page
-            // More than 4 pages: ₹2 per page
-            const rate = pages <= 4 ? 3 : 2;
-            
-            return (pages * rate).toFixed(2);
-        }
-
-        // Reset form to default values
-        function resetForm() {
-            uploadForm.reset();
-            selectedFile = null;
-            jobId = null;
-            totalPages = 0;
-            currentPdf = null;
-            uploadBtn.disabled = true;
-            printBtn.disabled = true;
-            uploadResult.textContent = "";
-            pdfControls.style.display = 'none';
-            estimatedPriceEl.textContent = "0.00";
-            totalPagesEl.textContent = "-";
-            previewBox.innerHTML = '<p style="color:#888;">No preview yet.</p>';
-            
-            // Clear any existing intervals
-            if (paymentCheckInterval) {
-                clearInterval(paymentCheckInterval);
-                paymentCheckInterval = null;
-            }
-        }
-
-        // Function to check payment status
-        async function checkPaymentStatus(orderId) {
-            try {
-                const response = await fetch(`/check-payment-status/${orderId}`);
-                const data = await response.json();
-                
-                if (data.payment_status === 'paid' || data.payment_status === 'success') {
-                    // Payment successful
-                    handlePaymentSuccess();
-                    return true;
-                } else if (data.payment_status === 'failed' || data.payment_status === 'expired') {
-                    // Payment failed
-                    alert('Payment failed. Please try again.');
-                    return true;
-                }
-                return false;
-            } catch (error) {
-                console.error('Error checking payment status:', error);
-                return false;
-            }
-        }
-
-        // Function to handle successful payment
-        function handlePaymentSuccess() {
-            // Show success message
-            successMessage.style.display = "block";
-            
-            // Reset form to default
-            resetForm();
-            
-            // Hide payment modal
-            paymentModal.style.display = "none";
-            paymentForm.innerHTML = "";
-            
-            // Clear any existing intervals
-            if (paymentCheckInterval) {
-                clearInterval(paymentCheckInterval);
-                paymentCheckInterval = null;
-            }
-            
-            // Hide success message after 5 seconds
-            setTimeout(() => {
-                successMessage.style.display = "none";
-            }, 5000);
-        }
-
-        // Function to start payment status polling
-        function startPaymentStatusPolling(orderId) {
-            // Clear any existing interval first
-            if (paymentCheckInterval) {
-                clearInterval(paymentCheckInterval);
-            }
-            
-            // Start polling for payment status
-            paymentCheckInterval = setInterval(async () => {
-                const paymentCompleted = await checkPaymentStatus(orderId);
-                if (paymentCompleted) {
-                    clearInterval(paymentCheckInterval);
-                    paymentCheckInterval = null;
-                }
-            }, 3000); // Check every 3 seconds
-        }
-
-        fileInput.addEventListener("change", (e) => {
-            selectedFile = e.target.files[0] || null;
-            uploadBtn.disabled = true;
-            printBtn.disabled = true;
-            uploadResult.textContent = "";
-            pdfControls.style.display = 'none';
-            estimatedPriceEl.textContent = "0.00";
-
-            currentPdf = null;
-            currentPageNum = 1;
-        });
-
-        function isValidPageRange(str, maxPage) {
-            if (!str || !str.trim()) return true;
-            if (!maxPage || maxPage <= 0) return true;
-            const parts = str.split(",");
-            for (let raw of parts) {
-                const part = raw.trim();
-                if (!part) continue;
-                if (part.includes("-")) {
-                    const bounds = part.split("-").map(s => s.trim());
-                    if (bounds.length !== 2) return false;
-                    const a = Number(bounds[0]);
-                    const b = Number(bounds[1]);
-                    if (!Number.isInteger(a) || !Number.isInteger(b)) return false;
-                    if (a < 1 || b < 1 || a > b || b > maxPage) return false;
-                } else {
-                    const n = Number(part);
-                    if (!Number.isInteger(n)) return false;
-                    if (n < 1 || n > maxPage) return false;
-                }
-            }
+          if (data.payment_status === 'paid' || data.payment_status === 'success') {
+            // Payment successful
+            handlePaymentSuccess();
             return true;
+          } else if (data.payment_status === 'failed' || data.payment_status === 'expired') {
+            // Payment failed
+            alert('Payment failed. Please try again.');
+            return true;
+          }
+          return false;
+        } catch (error) {
+          console.error('Error checking payment status:', error);
+          return false;
+        }
+      }
+
+      // Function to handle successful payment
+      function handlePaymentSuccess() {
+        // Show success message
+        successMessage.style.display = "block";
+
+        // Reset form to default
+        resetForm();
+
+        // Hide payment modal
+        paymentModal.style.display = "none";
+        paymentForm.innerHTML = "";
+
+        // Clear any existing intervals
+        if (paymentCheckInterval) {
+          clearInterval(paymentCheckInterval);
+          paymentCheckInterval = null;
         }
 
-        pagesInput.addEventListener("input", () => {
-            const val = pagesInput.value.trim();
-            const ok = isValidPageRange(val, totalPages);
-            pageError.style.display = ok ? "none" : "block";
+        // Hide success message after 5 seconds
+        setTimeout(() => {
+          successMessage.style.display = "none";
+        }, 5000);
+      }
+
+      // Function to start payment status polling
+      function startPaymentStatusPolling(orderId) {
+        // Clear any existing interval first
+        if (paymentCheckInterval) {
+          clearInterval(paymentCheckInterval);
+        }
+
+        // Start polling for payment status
+        paymentCheckInterval = setInterval(async () => {
+          const paymentCompleted = await checkPaymentStatus(orderId);
+          if (paymentCompleted) {
+            clearInterval(paymentCheckInterval);
+            paymentCheckInterval = null;
+          }
+        }, 3000); // Check every 3 seconds
+      }
+
+      fileInput.addEventListener("change", (e) => {
+        selectedFile = e.target.files[0] || null;
+        uploadBtn.disabled = true;
+        printBtn.disabled = true;
+        uploadResult.textContent = "";
+        pdfControls.style.display = 'none';
+        estimatedPriceEl.textContent = "0.00";
+
+        currentPdf = null;
+        currentPageNum = 1;
+      });
+
+      function isValidPageRange(str, maxPage) {
+        if (!str || !str.trim()) return true;
+        if (!maxPage || maxPage <= 0) return true;
+        const parts = str.split(",");
+        for (let raw of parts) {
+          const part = raw.trim();
+          if (!part) continue;
+          if (part.includes("-")) {
+            const bounds = part.split("-").map(s => s.trim());
+            if (bounds.length !== 2) return false;
+            const a = Number(bounds[0]);
+            const b = Number(bounds[1]);
+            if (!Number.isInteger(a) || !Number.isInteger(b)) return false;
+            if (a < 1 || b < 1 || a > b || b > maxPage) return false;
+          } else {
+            const n = Number(part);
+            if (!Number.isInteger(n)) return false;
+            if (n < 1 || n > maxPage) return false;
+          }
+        }
+        return true;
+      }
+
+      pagesInput.addEventListener("input", () => {
+        const val = pagesInput.value.trim();
+        const ok = isValidPageRange(val, totalPages);
+        pageError.style.display = ok ? "none" : "block";
+      });
+
+      function renderPage(pageNum) {
+        if (pdfRendering || !currentPdf) return;
+
+        pdfRendering = true;
+        currentPageNum = pageNum;
+
+        currentPdf.getPage(pageNum).then(function (page) {
+          const viewport = page.getViewport({ scale: 1.5 });
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+
+          const renderContext = { canvasContext: ctx, viewport: viewport };
+
+          previewBox.innerHTML = '';
+          previewBox.appendChild(canvas);
+
+          const renderTask = page.render(renderContext);
+          renderTask.promise.then(function () {
+            pageNumSpan.textContent = `Page: ${pageNum} of ${totalPages}`;
+            prevPageBtn.disabled = pageNum <= 1;
+            nextPageBtn.disabled = pageNum >= totalPages;
+            pdfRendering = false;
+
+            if (pdfRenderQueue !== null) {
+              const nextPage = pdfRenderQueue;
+              pdfRenderQueue = null;
+              renderPage(nextPage);
+            }
+          });
+        }).catch(function (error) {
+          console.error('Error rendering page:', error);
+          pdfRendering = false;
+          pdfRenderQueue = null;
         });
+      }
 
-        function renderPage(pageNum) {
-            if (pdfRendering || !currentPdf) return;
+      async function renderPdfWithPdfJs(file) {
+        try {
+          const form = document.getElementById("upload-form");
+          const fd = new FormData();
+          fd.append("file", file);
+          fd.append("orientation", form.orientation.value || "portrait");
+          fd.append("pages", pagesInput.value.trim());
 
-            pdfRendering = true;
-            currentPageNum = pageNum;
+          previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Loading PDF...</p></div>`;
 
-            currentPdf.getPage(pageNum).then(function (page) {
-                const viewport = page.getViewport({ scale: 1.5 });
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.height = viewport.height;
-                canvas.width = viewport.width;
+          const res = await fetch("/preview", { method: "POST", body: fd });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: "unknown" }));
+            previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'server error'}</p>`;
+            return;
+          }
 
-                const renderContext = { canvasContext: ctx, viewport: viewport };
+          const pagesHeader = res.headers.get("X-Total-Pages");
+          totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
+          totalPagesEl.textContent = totalPages || "-";
 
-                previewBox.innerHTML = '';
-                previewBox.appendChild(canvas);
+          // Update estimated price with corrected pricing logic
+          estimatedPriceEl.textContent = calculatePrice(totalPages);
 
-                const renderTask = page.render(renderContext);
-                renderTask.promise.then(function () {
-                    pageNumSpan.textContent = `Page: ${pageNum} of ${totalPages}`;
-                    prevPageBtn.disabled = pageNum <= 1;
-                    nextPageBtn.disabled = pageNum >= totalPages;
-                    pdfRendering = false;
+          const arrayBuffer = await res.arrayBuffer();
+          const typedarray = new Uint8Array(arrayBuffer);
 
-                    if (pdfRenderQueue !== null) {
-                        const nextPage = pdfRenderQueue;
-                        pdfRenderQueue = null;
-                        renderPage(nextPage);
-                    }
-                });
-            }).catch(function (error) {
-                console.error('Error rendering page:', error);
-                pdfRendering = false;
-                pdfRenderQueue = null;
+          currentPdf = await pdfjsLib.getDocument(typedarray).promise;
+          currentPageNum = 1;
+          pdfControls.style.display = 'flex';
+          renderPage(1);
+
+          uploadBtn.disabled = false;
+          pageError.style.display = "none";
+        } catch (error) {
+          console.error("Error rendering PDF:", error);
+          previewBox.innerHTML = `<p style="color:red">Failed to load preview: ${error.message}</p>`;
+        }
+      }
+
+      prevPageBtn.addEventListener('click', function () {
+        if (currentPdf && currentPageNum > 1) {
+          const nextPage = currentPageNum - 1;
+          if (pdfRendering) {
+            pdfRenderQueue = nextPage;
+          } else {
+            renderPage(nextPage);
+          }
+        }
+      });
+
+      nextPageBtn.addEventListener('click', function () {
+        if (currentPdf && currentPageNum < totalPages) {
+          const nextPage = currentPageNum + 1;
+          if (pdfRendering) {
+            pdfRenderQueue = nextPage;
+          } else {
+            renderPage(nextPage);
+          }
+        }
+      });
+
+      previewBtn.addEventListener("click", async () => {
+        if (!selectedFile) return alert("Please choose a PDF file first.");
+
+        if (isMobileDevice) {
+          renderPdfWithPdfJs(selectedFile);
+          return;
+        }
+
+        const form = document.getElementById("upload-form");
+        const fd = new FormData();
+        fd.append("file", selectedFile);
+        fd.append("orientation", form.orientation.value || "portrait");
+        fd.append("pages", pagesInput.value.trim());
+
+        previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Generating preview...</p></div>`;
+        try {
+          const res = await fetch("/preview", { method: "POST", body: fd });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: "unknown" }));
+            previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'server error'}</p>`;
+            return;
+          }
+
+          const pagesHeader = res.headers.get("X-Total-Pages");
+          const priceHeader = res.headers.get("X-Price");
+          const highBlackPagesHeader = res.headers.get("X-High-Black-Pages");
+          const normalPagesHeader = res.headers.get("X-Normal-Pages");
+
+          totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
+          totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
+
+          // Use the price calculated by the server with new logic
+          estimatedPriceEl.textContent = priceHeader || "0.00";
+
+          // Update pricing info to show breakdown
+          const highBlackPages = highBlackPagesHeader ? parseInt(highBlackPagesHeader, 10) : 0;
+          const normalPages = normalPagesHeader ? parseInt(normalPagesHeader, 10) : totalPages;
+
+          pricingInfoEl.innerHTML = `
+    Base price (${totalPages} pages × ₹${totalPages <= 4 ? '3' : '2'}): ₹${(totalPages * (totalPages <= 4 ? 3 : 2)).toFixed(2)}<br>
+    ${highBlackPages > 0 ? `High-black surcharge (${highBlackPages} pages × ₹2): ₹${(highBlackPages * 2).toFixed(2)}` : ''}
+`;
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          previewBox.innerHTML = "";
+          const embed = document.createElement("embed");
+          embed.src = url;
+          embed.type = "application/pdf";
+          embed.style.width = "100%";
+          embed.style.height = "100%";
+          embed.style.minHeight = "500px";
+          previewBox.appendChild(embed);
+
+          uploadBtn.disabled = false;
+          pageError.style.display = "none";
+          pdfControls.style.display = 'none';
+        } catch (err) {
+          console.error("Preview error:", err);
+          previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.message}</p>`;
+        }
+      });
+      uploadBtn.addEventListener("click", async () => {
+        if (!selectedFile) return alert("No file selected.");
+        const pagesVal = pagesInput.value.trim();
+
+        const form = document.getElementById("upload-form");
+        const fd = new FormData();
+        fd.append("file", selectedFile);
+        fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
+        fd.append("orientation", form.orientation.value);
+        fd.append("pages", pagesVal);
+        fd.append("sides", "single");
+        fd.append("paper_size", "A4");
+
+        // Calculate price based on pages with corrected pricing logic
+        const price = calculatePrice(totalPages);
+        fd.append("price", price);
+
+        uploadResult.textContent = "Uploading...";
+        uploadBtn.disabled = true;
+        try {
+          const res = await fetch("/upload", { method: "POST", body: fd });
+          const data = await res.json();
+          if (res.ok && data.job_id) {
+            jobId = data.job_id;
+            totalPages = data.total_pages || totalPages || 0;
+            totalPagesEl.textContent = totalPages || "-";
+            uploadResult.textContent = `Upload successful. Job ID: ${jobId}. Total pages: ${totalPages}`;
+            uploadResult.style.color = "green";
+            printBtn.disabled = false;
+          } else {
+            uploadResult.textContent = `Upload failed: ${data.error || JSON.stringify(data)}`;
+            uploadResult.style.color = "red";
+            uploadBtn.disabled = false;
+          }
+        } catch (err) {
+          console.error("Upload error:", err);
+          uploadResult.textContent = `Upload error: ${err.message}`;
+          uploadResult.style.color = "red";
+          uploadBtn.disabled = false;
+        }
+      });
+
+      printBtn.addEventListener("click", async () => {
+        if (!jobId) return alert("Please upload and create a job first.");
+
+        const price = calculatePrice(totalPages);
+
+        const payload = {
+          job_id: jobId,
+          price: price
+        };
+
+        try {
+          const res = await fetch("/create-payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+
+          const data = await res.json();
+
+          if (res.ok && data.payment_session_id) {
+            // Show payment modal
+            paymentJobId.textContent = jobId;
+            paymentAmount.textContent = price;
+            paymentModal.style.display = "block";
+
+            // Store order ID for status checking
+            const orderId = data.order_id;
+
+            // Start polling for payment status
+            startPaymentStatusPolling(orderId);
+
+            // Initialize Cashfree checkout
+            const cashfree = new Cashfree({ mode: "production" });
+
+            cashfree.checkout({
+              paymentSessionId: data.payment_session_id,
+              redirectTarget: "_modal",
+              container: paymentForm
             });
+          } else {
+            alert("Failed to create payment session: " + (data.error || JSON.stringify(data)));
+          }
+        } catch (err) {
+          console.error("Payment initiation error:", err);
+          alert("Error initiating payment: " + err.message);
         }
+      });
 
-        async function renderPdfWithPdfJs(file) {
-            try {
-                const form = document.getElementById("upload-form");
-                const fd = new FormData();
-                fd.append("file", file);
-                fd.append("orientation", form.orientation.value || "portrait");
-                fd.append("pages", pagesInput.value.trim());
+      // Close payment modal
+      closePaymentBtn.addEventListener("click", function () {
+        paymentModal.style.display = "none";
+        paymentForm.innerHTML = "";
 
-                previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Loading PDF...</p></div>`;
-
-                const res = await fetch("/preview", { method: "POST", body: fd });
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({ error: "unknown" }));
-                    previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'server error'}</p>`;
-                    return;
-                }
-
-                const pagesHeader = res.headers.get("X-Total-Pages");
-                totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
-                totalPagesEl.textContent = totalPages || "-";
-                
-                // Update estimated price with corrected pricing logic
-                estimatedPriceEl.textContent = calculatePrice(totalPages);
-
-                const arrayBuffer = await res.arrayBuffer();
-                const typedarray = new Uint8Array(arrayBuffer);
-
-                currentPdf = await pdfjsLib.getDocument(typedarray).promise;
-                currentPageNum = 1;
-                pdfControls.style.display = 'flex';
-                renderPage(1);
-
-                uploadBtn.disabled = false;
-                pageError.style.display = "none";
-            } catch (error) {
-                console.error("Error rendering PDF:", error);
-                previewBox.innerHTML = `<p style="color:red">Failed to load preview: ${error.message}</p>`;
-            }
+        // Clear payment status polling when modal is closed manually
+        if (paymentCheckInterval) {
+          clearInterval(paymentCheckInterval);
+          paymentCheckInterval = null;
         }
+      });
 
-        prevPageBtn.addEventListener('click', function () {
-            if (currentPdf && currentPageNum > 1) {
-                const nextPage = currentPageNum - 1;
-                if (pdfRendering) {
-                    pdfRenderQueue = nextPage;
-                } else {
-                    renderPage(nextPage);
-                }
-            }
-        });
+      // Listen for payment success events from Cashfree SDK
+      window.addEventListener("message", function (event) {
+        if (event.data && event.data.type === "PAYMENT_SUCCESS") {
+          handlePaymentSuccess();
+        } else if (event.data && event.data.type === "PAYMENT_FAILED") {
+          alert("Payment failed. Please try again.");
 
-        nextPageBtn.addEventListener('click', function () {
-            if (currentPdf && currentPageNum < totalPages) {
-                const nextPage = currentPageNum + 1;
-                if (pdfRendering) {
-                    pdfRenderQueue = nextPage;
-                } else {
-                    renderPage(nextPage);
-                }
-            }
-        });
-
-        previewBtn.addEventListener("click", async () => {
-            if (!selectedFile) return alert("Please choose a PDF file first.");
-
-            if (isMobileDevice) {
-                renderPdfWithPdfJs(selectedFile);
-                return;
-            }
-
-            const form = document.getElementById("upload-form");
-            const fd = new FormData();
-            fd.append("file", selectedFile);
-            fd.append("orientation", form.orientation.value || "portrait");
-            fd.append("pages", pagesInput.value.trim());
-
-            previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Generating preview...</p></div>`;
-            try {
-                const res = await fetch("/preview", { method: "POST", body: fd });
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({ error: "unknown" }));
-                    previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'server error'}</p>`;
-                    return;
-                }
-                const pagesHeader = res.headers.get("X-Total-Pages");
-                totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
-                totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
-                
-                // Update estimated price with corrected pricing logic
-                estimatedPriceEl.textContent = calculatePrice(totalPages);
-
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                previewBox.innerHTML = "";
-                const embed = document.createElement("embed");
-                embed.src = url;
-                embed.type = "application/pdf";
-                embed.style.width = "100%";
-                embed.style.height = "100%";
-                embed.style.minHeight = "500px";
-                previewBox.appendChild(embed);
-
-                uploadBtn.disabled = false;
-                pageError.style.display = "none";
-                pdfControls.style.display = 'none';
-            } catch (err) {
-                console.error("Preview error:", err);
-                previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.message}</p>`;
-            }
-        });
-
-        uploadBtn.addEventListener("click", async () => {
-            if (!selectedFile) return alert("No file selected.");
-            const pagesVal = pagesInput.value.trim();
-
-            const form = document.getElementById("upload-form");
-            const fd = new FormData();
-            fd.append("file", selectedFile);
-            fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
-            fd.append("orientation", form.orientation.value);
-            fd.append("pages", pagesVal);
-            fd.append("sides", "single");
-            fd.append("paper_size", "A4");
-
-            // Calculate price based on pages with corrected pricing logic
-            const price = calculatePrice(totalPages);
-            fd.append("price", price);
-
-            uploadResult.textContent = "Uploading...";
-            uploadBtn.disabled = true;
-            try {
-                const res = await fetch("/upload", { method: "POST", body: fd });
-                const data = await res.json();
-                if (res.ok && data.job_id) {
-                    jobId = data.job_id;
-                    totalPages = data.total_pages || totalPages || 0;
-                    totalPagesEl.textContent = totalPages || "-";
-                    uploadResult.textContent = `Upload successful. Job ID: ${jobId}. Total pages: ${totalPages}`;
-                    uploadResult.style.color = "green";
-                    printBtn.disabled = false;
-                } else {
-                    uploadResult.textContent = `Upload failed: ${data.error || JSON.stringify(data)}`;
-                    uploadResult.style.color = "red";
-                    uploadBtn.disabled = false;
-                }
-            } catch (err) {
-                console.error("Upload error:", err);
-                uploadResult.textContent = `Upload error: ${err.message}`;
-                uploadResult.style.color = "red";
-                uploadBtn.disabled = false;
-            }
-        });
-
-        printBtn.addEventListener("click", async () => {
-            if (!jobId) return alert("Please upload and create a job first.");
-
-            const price = calculatePrice(totalPages);
-            
-            const payload = {
-                job_id: jobId,
-                price: price
-            };
-
-            try {
-                const res = await fetch("/create-payment", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-
-                const data = await res.json();
-
-                if (res.ok && data.payment_session_id) {
-                    // Show payment modal
-                    paymentJobId.textContent = jobId;
-                    paymentAmount.textContent = price;
-                    paymentModal.style.display = "block";
-                    
-                    // Store order ID for status checking
-                    const orderId = data.order_id;
-                    
-                    // Start polling for payment status
-                    startPaymentStatusPolling(orderId);
-                    
-                    // Initialize Cashfree checkout
-                    const cashfree = new Cashfree({ mode: "production" });
-                    
-                    cashfree.checkout({
-                        paymentSessionId: data.payment_session_id,
-                        redirectTarget: "_modal",
-                        container: paymentForm
-                    });
-                } else {
-                    alert("Failed to create payment session: " + (data.error || JSON.stringify(data)));
-                }
-            } catch (err) {
-                console.error("Payment initiation error:", err);
-                alert("Error initiating payment: " + err.message);
-            }
-        });
-
-        // Close payment modal
-        closePaymentBtn.addEventListener("click", function() {
-            paymentModal.style.display = "none";
-            paymentForm.innerHTML = "";
-            
-            // Clear payment status polling when modal is closed manually
-            if (paymentCheckInterval) {
-                clearInterval(paymentCheckInterval);
-                paymentCheckInterval = null;
-            }
-        });
-
-        // Listen for payment success events from Cashfree SDK
-        window.addEventListener("message", function(event) {
-            if (event.data && event.data.type === "PAYMENT_SUCCESS") {
-                handlePaymentSuccess();
-            } else if (event.data && event.data.type === "PAYMENT_FAILED") {
-                alert("Payment failed. Please try again.");
-                
-                // Stop polling if payment failed
-                if (paymentCheckInterval) {
-                    clearInterval(paymentCheckInterval);
-                    paymentCheckInterval = null;
-                }
-            }
-        });
-
-        // Also check URL parameters for payment status (in case of redirect)
-        function checkUrlForPaymentStatus() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const paymentStatus = urlParams.get('payment_status');
-            const orderId = urlParams.get('order_id');
-            
-            if (paymentStatus === 'success' && orderId) {
-                handlePaymentSuccess();
-                
-                // Clean URL
-                window.history.replaceState({}, document.title, window.location.pathname);
-            }
+          // Stop polling if payment failed
+          if (paymentCheckInterval) {
+            clearInterval(paymentCheckInterval);
+            paymentCheckInterval = null;
+          }
         }
+      });
 
-        // Check URL parameters on page load
-        checkUrlForPaymentStatus();
+      // Also check URL parameters for payment status (in case of redirect)
+      function checkUrlForPaymentStatus() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const paymentStatus = urlParams.get('payment_status');
+        const orderId = urlParams.get('order_id');
+
+        if (paymentStatus === 'success' && orderId) {
+          handlePaymentSuccess();
+
+          // Clean URL
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      }
+
+      // Check URL parameters on page load
+      checkUrlForPaymentStatus();
 
     })();
-</script>
+  </script>
 </body>
+
 </html>

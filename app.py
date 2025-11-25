@@ -14,6 +14,8 @@ import requests
 import json
 import time
 from datetime import datetime
+import cv2
+import numpy as np
 
 # --- Supabase Config ---
 SUPABASE_URL = "https://fgksbxrxskwchjyqxpvx.supabase.co"
@@ -29,9 +31,168 @@ WEBHOOK_SECRET = "x191i9m9ymo4skygxh2z"
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
-@app.route("/")
-def index():
-    return render_template("index.html")
+def analyze_image_bw_percentage(image_array, threshold_percent=20):
+    """
+    Analyzes an image array and calculates the percentage of black and white pixels.
+    
+    Args:
+        image_array: numpy array of the image
+        threshold_percent (int): The percentage threshold for binarization.
+    
+    Returns:
+        tuple: (percentage_black, percentage_white)
+    """
+    try:
+        # Convert to grayscale if needed
+        if len(image_array.shape) == 3:
+            gray_img = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
+        else:
+            gray_img = image_array
+
+        # Determine the threshold value (0-255)
+        threshold_value = int((threshold_percent / 100) * 255)
+
+        # Apply binarization
+        _, bw_img = cv2.threshold(gray_img, threshold_value, 255, cv2.THRESH_BINARY_INV)
+
+        # Calculate pixel counts
+        total_pixels = bw_img.size
+        white_pixels = np.count_nonzero(bw_img)
+        black_pixels = total_pixels - white_pixels
+
+        # Calculate percentages
+        percent_white = (white_pixels / total_pixels) * 100
+        percent_black = (black_pixels / total_pixels) * 100
+
+        return percent_black, percent_white
+        
+    except Exception as e:
+        print(f"Error analyzing image: {e}")
+        return 0, 100  # Default to white page if analysis fails
+
+def analyze_pdf_page_content(pdf_bytes, page_range=None, dpi=150):
+    """
+    Analyzes PDF pages to determine black percentage for pricing.
+    
+    Args:
+        pdf_bytes: PDF file bytes
+        page_range: List of page indices to analyze (0-based)
+        dpi: Resolution for image conversion
+    
+    Returns:
+        dict: Page analysis results and pricing information
+    """
+    try:
+        # Open PDF with PyMuPDF
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total_pages = len(doc)
+        
+        # Determine which pages to analyze
+        if page_range is None:
+            pages_to_analyze = list(range(total_pages))
+        else:
+            pages_to_analyze = [p for p in page_range if 0 <= p < total_pages]
+        
+        page_analysis = []
+        high_black_pages = 0
+        
+        for page_num in pages_to_analyze:
+            try:
+                page = doc.load_page(page_num)
+                
+                # Convert page to image with specified DPI
+                mat = fitz.Matrix(dpi/72, dpi/72)  # 72 is the default PDF DPI
+                pix = page.get_pixmap(matrix=mat)
+                
+                # Convert to numpy array
+                img_data = np.frombuffer(pix.samples, dtype=np.uint8)
+                img_array = img_data.reshape(pix.height, pix.width, pix.n)
+                
+                # Analyze black percentage
+                black_percent, white_percent = analyze_image_bw_percentage(img_array, threshold_percent=20)
+                
+                # Determine if page has high black content (>50%)
+                is_high_black = black_percent > 50
+                if is_high_black:
+                    high_black_pages += 1
+                
+                page_analysis.append({
+                    'page_number': page_num + 1,
+                    'black_percent': black_percent,
+                    'white_percent': white_percent,
+                    'is_high_black': is_high_black
+                })
+                
+            except Exception as e:
+                print(f"Error analyzing page {page_num + 1}: {e}")
+                # Default to non-high-black page if analysis fails
+                page_analysis.append({
+                    'page_number': page_num + 1,
+                    'black_percent': 0,
+                    'white_percent': 100,
+                    'is_high_black': False
+                })
+        
+        doc.close()
+        
+        return {
+            'total_pages': len(pages_to_analyze),
+            'high_black_pages': high_black_pages,
+            'normal_pages': len(pages_to_analyze) - high_black_pages,
+            'page_analysis': page_analysis
+        }
+        
+    except Exception as e:
+        print(f"Error in PDF analysis: {e}")
+        return {
+            'total_pages': 0,
+            'high_black_pages': 0,
+            'normal_pages': 0,
+            'page_analysis': []
+        }
+
+def calculate_price_v2(total_pages, high_black_pages, normal_pages):
+    """
+    CORRECTED PRICING LOGIC:
+    - Base price for ALL pages: 4 or fewer pages - ₹3 per page, More than 4 pages - ₹2 per page
+    - Additional ₹2 per high black page
+    """
+    if total_pages <= 0:
+        return "0.00"
+    
+    # Base price for ALL pages
+    base_rate = 3 if total_pages <= 4 else 2
+    base_price = total_pages * base_rate  # Apply to ALL pages
+    
+    # Additional charge for high black pages ONLY
+    high_black_charge = high_black_pages * 2
+    
+    total_price = base_price + high_black_charge
+    
+    return f"{total_price:.2f}"
+def get_page_range_from_string(page_range_str, max_page):
+    """
+    Convert page range string to list of page indices.
+    """
+    if not page_range_str or not page_range_str.strip():
+        return list(range(max_page))
+    
+    selected_indices = []
+    for part in page_range_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start, end = part.split("-")
+            start = int(start.strip())
+            end = int(end.strip())
+            selected_indices.extend(range(start - 1, end))
+        else:
+            selected_indices.append(int(part.strip()) - 1)
+    
+    # Filter valid indices
+    selected_indices = [i for i in selected_indices if 0 <= i < max_page]
+    return selected_indices
 
 def process_pdf_with_options(file_bytes, orientation, color_mode, page_range_str):
     """
@@ -40,30 +201,12 @@ def process_pdf_with_options(file_bytes, orientation, color_mode, page_range_str
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     total_pages = len(doc)
 
-    # --- Parse page range ---
-    selected_indices = []
-    if page_range_str:
-        for part in page_range_str.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            if "-" in part:
-                start, end = part.split("-")
-                start = int(start.strip())
-                end = int(end.strip())
-                selected_indices.extend(range(start - 1, end))
-            else:
-                selected_indices.append(int(part.strip()) - 1)
-        selected_indices = [i for i in selected_indices if 0 <= i < total_pages]
-    else:
-        selected_indices = list(range(total_pages))
+    # Parse page range
+    selected_indices = get_page_range_from_string(page_range_str, total_pages)
 
     # For simple operations, use PyPDF2 which preserves quality better
     if orientation == "portrait" and color_mode == "color":
         # Simple case - just extract pages using PyPDF2
-        from PyPDF2 import PdfReader, PdfWriter
-        import io
-        
         pdf_reader = PdfReader(io.BytesIO(file_bytes))
         pdf_writer = PdfWriter()
         
@@ -88,23 +231,24 @@ def process_pdf_with_options(file_bytes, orientation, color_mode, page_range_str
             
             if orientation == "landscape":
                 new_page.set_rotation(90)
-            
-            # Add color mode as annotation/metadata instead of converting
-            # The actual conversion should happen during printing
         
         pdf_bytes = new_doc.tobytes()
         new_doc.close()
         total_pages_processed = len(selected_indices)
     
     doc.close()
-    return pdf_bytes, total_pages_processed
+    return pdf_bytes, total_pages_processed, selected_indices
+
+@app.route("/")
+def index():
+    return render_template("index.html")
 
 # --- Preview PDF (temporary, not stored) ---
 @app.route("/preview", methods=["POST"])
 def preview_pdf():
     """
     Accepts: file, orientation, color_mode, pages (optional)
-    Returns: PDF file (blob) + X-Total-Pages header
+    Returns: PDF file (blob) + X-Total-Pages header + X-Price header
     """
     file = request.files.get("file")
     if not file:
@@ -118,8 +262,18 @@ def preview_pdf():
         file_bytes = file.read()
         
         # Process PDF with all options
-        processed_pdf_bytes, total_pages = process_pdf_with_options(
+        processed_pdf_bytes, total_pages, selected_indices = process_pdf_with_options(
             file_bytes, orientation, color_mode, page_range_str
+        )
+
+        # Analyze PDF content for pricing
+        analysis_result = analyze_pdf_page_content(file_bytes, selected_indices)
+        
+        # Calculate price with new logic
+        price = calculate_price_v2(
+            analysis_result['total_pages'],
+            analysis_result['high_black_pages'],
+            analysis_result['normal_pages']
         )
 
         response = send_file(
@@ -128,6 +282,10 @@ def preview_pdf():
             as_attachment=False
         )
         response.headers["X-Total-Pages"] = str(total_pages)
+        response.headers["X-Price"] = price
+        response.headers["X-High-Black-Pages"] = str(analysis_result['high_black_pages'])
+        response.headers["X-Normal-Pages"] = str(analysis_result['normal_pages'])
+        
         return response
 
     except Exception as e:
@@ -153,18 +311,34 @@ def upload_pdf():
     page_range_str = request.form.get("pages", "").strip()
     orientation = request.form.get("orientation", "portrait")
     color_mode = request.form.get("color_mode", "color")
-    price = request.form.get("price", "0.00")
 
     try:
         # Process PDF with all options (same as preview)
-        filtered_pdf_bytes, total_pages = process_pdf_with_options(
+        filtered_pdf_bytes, total_pages, selected_indices = process_pdf_with_options(
             file_bytes, orientation, color_mode, page_range_str
         )
+        
+        # Analyze PDF content for pricing
+        analysis_result = analyze_pdf_page_content(file_bytes, selected_indices)
+        
+        # Calculate price with new logic
+        price = calculate_price_v2(
+            analysis_result['total_pages'],
+            analysis_result['high_black_pages'],
+            analysis_result['normal_pages']
+        )
+        
     except Exception as e:
         print(f"[WARN] PDF processing failed: {e}")
         # Fallback: use original file without processing
         filtered_pdf_bytes = file_bytes
         total_pages = len(PdfReader(io.BytesIO(file_bytes)).pages)
+        price = "0.00"
+        analysis_result = {
+            'total_pages': total_pages,
+            'high_black_pages': 0,
+            'normal_pages': total_pages
+        }
 
     # --- Upload to Supabase Storage ---
     try:
@@ -183,6 +357,8 @@ def upload_pdf():
         "original_filename": original_filename,
         "status": "uploaded",
         "total_pages": total_pages,
+        "high_black_pages": analysis_result['high_black_pages'],
+        "normal_pages": analysis_result['normal_pages'],
         "sides": sides,
         "orientation": orientation,
         "color_mode": color_mode,
@@ -201,13 +377,18 @@ def upload_pdf():
             return jsonify({
                 "job_id": created.get("id"),
                 "file_url": file_url,
-                "total_pages": total_pages
+                "total_pages": total_pages,
+                "high_black_pages": analysis_result['high_black_pages'],
+                "normal_pages": analysis_result['normal_pages'],
+                "price": price
             })
         else:
             return jsonify({"error": "Failed to create job"}), 500
             
     except Exception as e:
         return jsonify({"error": "DB insert failed", "detail": str(e)}), 500
+
+# ... [Keep the existing payment-related functions unchanged - create_cashfree_payment_session, create_payment, payment_webhook, verify_webhook_signature, check_payment_status] ...
 
 def create_cashfree_payment_session(order_id, order_amount, customer_id, customer_email, customer_phone):
     """Create a payment session with Cashfree"""
@@ -315,7 +496,6 @@ def create_payment():
         })
     else:
         return jsonify({"error": result["error"]}), 400
-
 
 @app.route("/payment-callback", methods=["POST"])
 def payment_webhook():
@@ -443,7 +623,7 @@ def verify_webhook_signature(webhook_data, signature):
         import traceback
         traceback.print_exc()
         return False
-    
+
 @app.route("/check-payment-status/<order_id>")
 def check_payment_status(order_id):
     """Check the payment status of an order"""
