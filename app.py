@@ -484,8 +484,7 @@ def create_payment():
     """Create a payment session for a print job"""
     data = request.json
     job_id = data.get("job_id")
-    price = data.get("price", 0)
-    
+
     if not job_id:
         return jsonify({"error": "Job ID is required"}), 400
     
@@ -497,7 +496,8 @@ def create_payment():
         
         job = job_result.data[0]
         customer_id = job.get("customer_id", "customer_123")
-        
+        price = job.get("price", "0.00")  # ✅ Get price from database
+
     except Exception as e:
         print(f"Error fetching job: {e}")
         customer_id = "customer_123"
@@ -527,6 +527,8 @@ def create_payment():
         return jsonify({
             "payment_session_id": result["payment_session_id"],
             "order_id": order_id,
+            "price": price,  # ✅ Return the actual price to frontend
+
             "mode": CASHFREE_ENV
         })
     else:
