@@ -11,3 +11,4 @@ pdf2image
 img2pdf
 requests
 setuptools
+opencv-python
