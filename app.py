@@ -294,32 +294,50 @@ def preview_pdf():
 # --- Upload PDF (after user confirms preview) ---
 @app.route("/upload", methods=["POST"])
 def upload_pdf():
+    print("=== UPLOAD PROCESS STARTED ===")
+    
     file = request.files.get("file")
     customer_id = request.form.get("customer_id")
+    
     if not file or not customer_id:
+        print("❌ ERROR: Missing file or customer_id")
         return jsonify({"error": "Missing file or customer_id"}), 400
 
     original_filename = secure_filename(file.filename)
     filename = f"{uuid.uuid4()}_{original_filename}"
+    
+    print(f"📁 File: {original_filename}")
+    print(f"👤 Customer ID: {customer_id}")
+    print(f"🔧 Generated filename: {filename}")
+
+    # Read file bytes
     file_bytes = file.read()
+    print(f"📄 File size: {len(file_bytes)} bytes")
 
     mime_type, _ = mimetypes.guess_type(original_filename)
     if not mime_type:
         mime_type = "application/pdf"
+    print(f"📋 MIME type: {mime_type}")
 
     # Get processing options from request
     page_range_str = request.form.get("pages", "").strip()
     orientation = request.form.get("orientation", "portrait")
     color_mode = request.form.get("color_mode", "color")
+    
+    print(f"⚙️  Settings - Orientation: {orientation}, Color: {color_mode}, Page range: '{page_range_str}'")
 
     try:
+        print("🔄 Processing PDF with options...")
         # Process PDF with all options (same as preview)
         filtered_pdf_bytes, total_pages, selected_indices = process_pdf_with_options(
             file_bytes, orientation, color_mode, page_range_str
         )
+        print(f"✅ PDF processed - Total pages: {total_pages}, Selected indices: {selected_indices}")
         
+        print("🔍 Analyzing PDF content for pricing...")
         # Analyze PDF content for pricing
         analysis_result = analyze_pdf_page_content(file_bytes, selected_indices)
+        print(f"📊 Analysis result: {analysis_result}")
         
         # Calculate price with new logic
         price = calculate_price_v2(
@@ -327,10 +345,15 @@ def upload_pdf():
             analysis_result['high_black_pages'],
             analysis_result['normal_pages']
         )
+        print(f"💰 Calculated price: ₹{price}")
         
     except Exception as e:
-        print(f"[WARN] PDF processing failed: {e}")
+        print(f"❌ WARNING: PDF processing failed: {e}")
+        import traceback
+        traceback.print_exc()  # This will print the full stack trace
+        
         # Fallback: use original file without processing
+        print("🔄 Using fallback processing...")
         filtered_pdf_bytes = file_bytes
         total_pages = len(PdfReader(io.BytesIO(file_bytes)).pages)
         price = "0.00"
@@ -339,17 +362,23 @@ def upload_pdf():
             'high_black_pages': 0,
             'normal_pages': total_pages
         }
+        print(f"🔄 Fallback values - Total pages: {total_pages}, Price: ₹{price}")
 
     # --- Upload to Supabase Storage ---
+    print("☁️  Uploading to Supabase storage...")
     try:
-        supabase.storage.from_("pdfs").upload(filename, filtered_pdf_bytes, {"content-type": mime_type})
+        upload_result = supabase.storage.from_("pdfs").upload(filename, filtered_pdf_bytes, {"content-type": mime_type})
         file_url = supabase.storage.from_("pdfs").get_public_url(filename)
+        print(f"✅ Storage upload successful: {file_url}")
     except Exception as e:
+        print(f"❌ ERROR: Storage upload failed: {e}")
         return jsonify({"error": "Storage upload failed", "detail": str(e)}), 500
 
     # Gather settings & store in DB
     sides = request.form.get("sides", "single")
     paper_size = request.form.get("paper_size", "A4")
+    
+    print(f"📋 Final settings - Sides: {sides}, Paper size: {paper_size}")
 
     job_payload = {
         "customer_id": customer_id,
@@ -357,8 +386,6 @@ def upload_pdf():
         "original_filename": original_filename,
         "status": "uploaded",
         "total_pages": total_pages,
-        "high_black_pages": analysis_result['high_black_pages'],
-        "normal_pages": analysis_result['normal_pages'],
         "sides": sides,
         "orientation": orientation,
         "color_mode": color_mode,
@@ -369,25 +396,33 @@ def upload_pdf():
         "created_at": datetime.now().isoformat()
     }
 
+    print("💾 Storing job in database...")
     try:
         job = supabase.table("print_jobs").insert(job_payload).execute()
         created = job.data[0] if job.data else None
         
         if created:
-            return jsonify({
+            print(f"✅ Database insert successful - Job ID: {created.get('id')}")
+            response_data = {
                 "job_id": created.get("id"),
                 "file_url": file_url,
                 "total_pages": total_pages,
                 "high_black_pages": analysis_result['high_black_pages'],
                 "normal_pages": analysis_result['normal_pages'],
                 "price": price
-            })
+            }
+            print(f"📦 Response data: {response_data}")
+            print("=== UPLOAD PROCESS COMPLETED SUCCESSFULLY ===")
+            return jsonify(response_data)
         else:
+            print("❌ ERROR: Failed to create job - No data returned from database")
             return jsonify({"error": "Failed to create job"}), 500
             
     except Exception as e:
+        print(f"❌ ERROR: DB insert failed: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": "DB insert failed", "detail": str(e)}), 500
-
 # ... [Keep the existing payment-related functions unchanged - create_cashfree_payment_session, create_payment, payment_webhook, verify_webhook_signature, check_payment_status] ...
 
 def create_cashfree_payment_session(order_id, order_amount, customer_id, customer_email, customer_phone):
