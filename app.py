@@ -31,13 +31,14 @@ WEBHOOK_SECRET = "x191i9m9ymo4skygxh2z"
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
-def analyze_image_bw_percentage(image_array, threshold_percent=20):
+def analyze_image_bw_percentage(image_array, threshold_fraction=0.90):
     """
-    Analyzes an image array and calculates the percentage of black and white pixels.
+    Analyzes an image array and calculates the percentage of black and white pixels
+    using the new threshold fraction logic.
     
     Args:
         image_array: numpy array of the image
-        threshold_percent (int): The percentage threshold for binarization.
+        threshold_fraction (float): The fraction threshold for binarization (0-1).
     
     Returns:
         tuple: (percentage_black, percentage_white)
@@ -49,16 +50,16 @@ def analyze_image_bw_percentage(image_array, threshold_percent=20):
         else:
             gray_img = image_array
 
-        # Determine the threshold value (0-255)
-        threshold_value = int((threshold_percent / 100) * 255)
+        # Determine the threshold value (0-255) using fraction
+        threshold_value = int(threshold_fraction * 255)
 
-        # Apply binarization
-        _, bw_img = cv2.threshold(gray_img, threshold_value, 255, cv2.THRESH_BINARY_INV)
+        # Apply binarization (inverted: black pixels become 0, white become 255)
+        _, bw_img = cv2.threshold(gray_img, threshold_value, 255, cv2.THRESH_BINARY)
 
         # Calculate pixel counts
         total_pixels = bw_img.size
-        white_pixels = np.count_nonzero(bw_img)
-        black_pixels = total_pixels - white_pixels
+        white_pixels = np.count_nonzero(bw_img == 255)
+        black_pixels = np.count_nonzero(bw_img == 0)
 
         # Calculate percentages
         percent_white = (white_pixels / total_pixels) * 100
@@ -69,7 +70,6 @@ def analyze_image_bw_percentage(image_array, threshold_percent=20):
     except Exception as e:
         print(f"Error analyzing image: {e}")
         return 0, 100  # Default to white page if analysis fails
-
 def analyze_pdf_page_content(pdf_bytes, page_range=None, dpi=150):
     """
     Analyzes PDF pages to determine black percentage for pricing.
@@ -109,10 +109,10 @@ def analyze_pdf_page_content(pdf_bytes, page_range=None, dpi=150):
                 img_array = img_data.reshape(pix.height, pix.width, pix.n)
                 
                 # Analyze black percentage
-                black_percent, white_percent = analyze_image_bw_percentage(img_array, threshold_percent=20)
+                black_percent, white_percent = analyze_image_bw_percentage(img_array, threshold_fraction=0.90)
                 
                 # Determine if page has high black content (>50%)
-                is_high_black = black_percent > 50
+                is_high_black = black_percent > 30
                 if is_high_black:
                     high_black_pages += 1
                 
@@ -170,6 +170,7 @@ def calculate_price_v2(total_pages, high_black_pages, normal_pages):
     total_price = base_price + high_black_charge
     
     return f"{total_price:.2f}"
+    
 def get_page_range_from_string(page_range_str, max_page):
     """
     Convert page range string to list of page indices.

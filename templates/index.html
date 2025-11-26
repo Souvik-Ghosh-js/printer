@@ -373,8 +373,10 @@
       let pdfRendering = false;
       let pdfRenderQueue = null;
       let paymentCheckInterval = null;
+      let autoPreviewTimeout = null;
 
       const fileInput = document.querySelector('input[name="file"]');
+      const orientationSelect = document.querySelector('select[name="orientation"]');
       const previewBtn = document.getElementById("preview-btn");
       const uploadBtn = document.getElementById("upload-btn");
       const printBtn = document.getElementById("print-btn");
@@ -416,7 +418,6 @@
 
         return (basePrice + highBlackCharge).toFixed(2);
       }
-
 
       // Reset form to default values
       function resetForm() {
@@ -513,7 +514,29 @@
 
         currentPdf = null;
         currentPageNum = 1;
+        
+        // Trigger auto-preview when file is selected
+        triggerAutoPreview();
       });
+
+      // Add event listeners for auto-preview
+      orientationSelect.addEventListener("change", triggerAutoPreview);
+      pagesInput.addEventListener("input", triggerAutoPreview);
+
+      // Auto-preview function with debouncing
+      function triggerAutoPreview() {
+        // Clear existing timeout
+        if (autoPreviewTimeout) {
+          clearTimeout(autoPreviewTimeout);
+        }
+        
+        // Set a new timeout to trigger preview after user stops typing
+        autoPreviewTimeout = setTimeout(() => {
+          if (selectedFile) {
+            generatePreview();
+          }
+        }, 800); // 800ms delay after user stops typing
+      }
 
       function isValidPageRange(str, maxPage) {
         if (!str || !str.trim()) return true;
@@ -582,6 +605,68 @@
         });
       }
 
+      async function generatePreview() {
+        if (!selectedFile) return;
+
+        if (isMobileDevice) {
+          renderPdfWithPdfJs(selectedFile);
+          return;
+        }
+
+        const form = document.getElementById("upload-form");
+        const fd = new FormData();
+        fd.append("file", selectedFile);
+        fd.append("orientation", form.orientation.value || "portrait");
+        fd.append("pages", pagesInput.value.trim());
+
+        previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Generating preview...</p></div>`;
+        try {
+          const res = await fetch("/preview", { method: "POST", body: fd });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: "unknown" }));
+            previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'server error'}</p>`;
+            return;
+          }
+
+          const pagesHeader = res.headers.get("X-Total-Pages");
+          const priceHeader = res.headers.get("X-Price");
+          const highBlackPagesHeader = res.headers.get("X-High-Black-Pages");
+          const normalPagesHeader = res.headers.get("X-Normal-Pages");
+
+          totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
+          totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
+
+          // Use the price calculated by the server with new logic
+          estimatedPriceEl.textContent = priceHeader || "0.00";
+
+          // Update pricing info to show breakdown
+          const highBlackPages = highBlackPagesHeader ? parseInt(highBlackPagesHeader, 10) : 0;
+          const normalPages = normalPagesHeader ? parseInt(normalPagesHeader, 10) : totalPages;
+
+          pricingInfoEl.innerHTML = `
+    Base price (${totalPages} pages × ₹${totalPages <= 4 ? '3' : '2'}): ₹${(totalPages * (totalPages <= 4 ? 3 : 2)).toFixed(2)}<br>
+    ${highBlackPages > 0 ? `High-black surcharge (${highBlackPages} pages × ₹2): ₹${(highBlackPages * 2).toFixed(2)}` : ''}
+`;
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          previewBox.innerHTML = "";
+          const embed = document.createElement("embed");
+          embed.src = url;
+          embed.type = "application/pdf";
+          embed.style.width = "100%";
+          embed.style.height = "100%";
+          embed.style.minHeight = "500px";
+          previewBox.appendChild(embed);
+
+          uploadBtn.disabled = false;
+          pageError.style.display = "none";
+          pdfControls.style.display = 'none';
+        } catch (err) {
+          console.error("Preview error:", err);
+          previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.message}</p>`;
+        }
+      }
+
       async function renderPdfWithPdfJs(file) {
         try {
           const form = document.getElementById("upload-form");
@@ -646,65 +731,9 @@
 
       previewBtn.addEventListener("click", async () => {
         if (!selectedFile) return alert("Please choose a PDF file first.");
-
-        if (isMobileDevice) {
-          renderPdfWithPdfJs(selectedFile);
-          return;
-        }
-
-        const form = document.getElementById("upload-form");
-        const fd = new FormData();
-        fd.append("file", selectedFile);
-        fd.append("orientation", form.orientation.value || "portrait");
-        fd.append("pages", pagesInput.value.trim());
-
-        previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Generating preview...</p></div>`;
-        try {
-          const res = await fetch("/preview", { method: "POST", body: fd });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({ error: "unknown" }));
-            previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'server error'}</p>`;
-            return;
-          }
-
-          const pagesHeader = res.headers.get("X-Total-Pages");
-          const priceHeader = res.headers.get("X-Price");
-          const highBlackPagesHeader = res.headers.get("X-High-Black-Pages");
-          const normalPagesHeader = res.headers.get("X-Normal-Pages");
-
-          totalPages = pagesHeader ? parseInt(pagesHeader, 10) : 0;
-          totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
-
-          // Use the price calculated by the server with new logic
-          estimatedPriceEl.textContent = priceHeader || "0.00";
-
-          // Update pricing info to show breakdown
-          const highBlackPages = highBlackPagesHeader ? parseInt(highBlackPagesHeader, 10) : 0;
-          const normalPages = normalPagesHeader ? parseInt(normalPagesHeader, 10) : totalPages;
-
-          pricingInfoEl.innerHTML = `
-    Base price (${totalPages} pages × ₹${totalPages <= 4 ? '3' : '2'}): ₹${(totalPages * (totalPages <= 4 ? 3 : 2)).toFixed(2)}<br>
-    ${highBlackPages > 0 ? `High-black surcharge (${highBlackPages} pages × ₹2): ₹${(highBlackPages * 2).toFixed(2)}` : ''}
-`;
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          previewBox.innerHTML = "";
-          const embed = document.createElement("embed");
-          embed.src = url;
-          embed.type = "application/pdf";
-          embed.style.width = "100%";
-          embed.style.height = "100%";
-          embed.style.minHeight = "500px";
-          previewBox.appendChild(embed);
-
-          uploadBtn.disabled = false;
-          pageError.style.display = "none";
-          pdfControls.style.display = 'none';
-        } catch (err) {
-          console.error("Preview error:", err);
-          previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.message}</p>`;
-        }
+        generatePreview();
       });
+
       uploadBtn.addEventListener("click", async () => {
         if (!selectedFile) return alert("No file selected.");
         const pagesVal = pagesInput.value.trim();
@@ -717,8 +746,6 @@
         fd.append("pages", pagesVal);
         fd.append("sides", "single");
         fd.append("paper_size", "A4");
-
-
 
         uploadResult.textContent = "Uploading...";
         uploadBtn.disabled = true;
