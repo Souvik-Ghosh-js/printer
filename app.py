@@ -151,6 +151,60 @@ def analyze_pdf_page_content(pdf_bytes, page_range=None, dpi=150):
             'page_analysis': []
         }
 
+
+@app.route("/delete-job/<job_id>", methods=["DELETE"])
+def delete_job(job_id):
+    """Delete a job from database and storage bucket"""
+    try:
+        print(f"🗑️  Deleting job: {job_id}")
+        
+        # Get job details from database first
+        job_result = supabase.table("print_jobs").select("file_url, original_filename").eq("id", job_id).execute()
+        
+        if not job_result.data:
+            print(f"❌ Job {job_id} not found in database")
+            return jsonify({"error": "Job not found"}), 404
+        
+        job = job_result.data[0]
+        file_url = job.get("file_url")
+        filename = job.get("original_filename")
+        
+        print(f"📁 Job file URL: {file_url}")
+        
+        # Extract filename from URL for storage deletion
+        if file_url:
+            # Extract the actual storage filename from the URL
+            # URL format: https://fgksbxrxskwchjyqxpvx.supabase.co/storage/v1/object/public/pdfs/filename.pdf
+            if "/pdfs/" in file_url:
+                storage_filename = file_url.split("/pdfs/")[-1]
+                print(f"🗂️  Storage filename to delete: {storage_filename}")
+                
+                # Delete from Supabase storage
+                try:
+                    delete_result = supabase.storage.from_("pdfs").remove([storage_filename])
+                    print(f"✅ Storage deletion result: {delete_result}")
+                except Exception as storage_error:
+                    print(f"⚠️  Storage deletion warning: {storage_error}")
+                    # Continue with DB deletion even if storage deletion fails
+        
+        # Delete from database
+        delete_db_result = supabase.table("print_jobs").delete().eq("id", job_id).execute()
+        
+        if delete_db_result.data:
+            print(f"✅ Successfully deleted job {job_id} from database")
+            return jsonify({"message": "Job deleted successfully"})
+        else:
+            print(f"❌ Failed to delete job {job_id} from database")
+            return jsonify({"error": "Failed to delete job from database"}), 500
+            
+    except Exception as e:
+        print(f"❌ Error deleting job {job_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": "Deletion failed", "detail": str(e)}), 500
+    
+
+    
 def calculate_price_v2(total_pages, high_black_pages, normal_pages):
     """
     CORRECTED PRICING LOGIC:

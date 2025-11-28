@@ -120,16 +120,6 @@
       transition: all 0.25s ease-in-out;
     }
 
-    #preview-btn {
-      background: #6c63ff;
-      color: white;
-    }
-
-    #upload-btn {
-      background: #4cafef;
-      color: white;
-    }
-
     #print-btn {
       background: #27ae60;
       color: white;
@@ -273,6 +263,65 @@
         transform: rotate(360deg);
       }
     }
+
+    /* ---------- PRINT MODAL ---------- */
+    .print-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .print-modal-content {
+      background: white;
+      padding: 25px;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 500px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    }
+
+    .print-modal h2 {
+      margin-top: 0;
+      color: #2c3e50;
+    }
+
+    .print-summary {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 15px 0;
+    }
+
+    .print-summary p {
+      margin: 8px 0;
+    }
+
+    .print-modal-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .print-modal-buttons button {
+      flex: 1;
+    }
+
+    #proceed-payment-btn {
+      background: #27ae60;
+      color: white;
+    }
+
+    #close-print-modal {
+      background: #e74c3c;
+      color: white;
+    }
   </style>
   <!-- PDF.js library for mobile devices -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
@@ -304,7 +353,7 @@
         <div id="page-error" class="error-text">Invalid page range (use numbers and ranges, e.g. 1,3,5-7)</div>
 
         <div class="info-box">
-          Preview your selected settings before uploading. After upload, total page count will be displayed.
+          Preview your selected settings before printing. After preview, total page count will be displayed.
         </div>
       </form>
 
@@ -315,9 +364,7 @@
       </div>
 
       <div class="controls-row">
-        <button id="preview-btn">Preview</button>
-        <button id="upload-btn" disabled>Upload & Create Job</button>
-        <button id="print-btn" disabled>Proceed to Payment</button>
+        <button id="print-btn" disabled>Print</button>
       </div>
 
       <div id="upload-result" class="info-box"></div>
@@ -336,6 +383,25 @@
         <button id="prev-page">Previous</button>
         <span id="page-num" class="page-info">Page: 1 of 1</span>
         <button id="next-page">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Print Confirmation Modal -->
+  <div id="print-modal" class="print-modal">
+    <div class="print-modal-content">
+      <h2>Confirm Print Job</h2>
+      <div class="print-summary">
+        <p><strong>Job ID:</strong> <span id="print-job-id">-</span></p>
+        <p><strong>Total Pages:</strong> <span id="print-total-pages">-</span></p>
+        <p><strong>Orientation:</strong> <span id="print-orientation">-</span></p>
+        <p><strong>Page Range:</strong> <span id="print-page-range">All</span></p>
+        <p><strong>Total Amount:</strong> ₹<span id="print-total-amount">0.00</span></p>
+      </div>
+      <p>Please review your print job details above. Click "Proceed to Payment" to continue.</p>
+      <div class="print-modal-buttons">
+        <button id="close-print-modal">Cancel</button>
+        <button id="proceed-payment-btn">Proceed to Payment</button>
       </div>
     </div>
   </div>
@@ -377,8 +443,6 @@
 
       const fileInput = document.querySelector('input[name="file"]');
       const orientationSelect = document.querySelector('select[name="orientation"]');
-      const previewBtn = document.getElementById("preview-btn");
-      const uploadBtn = document.getElementById("upload-btn");
       const printBtn = document.getElementById("print-btn");
       const previewBox = document.getElementById("preview-box");
       const totalPagesEl = document.getElementById("total-pages");
@@ -391,6 +455,17 @@
       const prevPageBtn = document.getElementById("prev-page");
       const nextPageBtn = document.getElementById("next-page");
       const pageNumSpan = document.getElementById("page-num");
+
+      // Modal elements
+      const printModal = document.getElementById("print-modal");
+      const printJobId = document.getElementById("print-job-id");
+      const printTotalPages = document.getElementById("print-total-pages");
+      const printOrientation = document.getElementById("print-orientation");
+      const printPageRange = document.getElementById("print-page-range");
+      const printTotalAmount = document.getElementById("print-total-amount");
+      const closePrintModal = document.getElementById("close-print-modal");
+      const proceedPaymentBtn = document.getElementById("proceed-payment-btn");
+
       const paymentModal = document.getElementById("payment-modal");
       const paymentJobId = document.getElementById("payment-job-id");
       const paymentAmount = document.getElementById("payment-amount");
@@ -426,7 +501,6 @@
         jobId = null;
         totalPages = 0;
         currentPdf = null;
-        uploadBtn.disabled = true;
         printBtn.disabled = true;
         uploadResult.textContent = "";
         pdfControls.style.display = 'none';
@@ -487,6 +561,89 @@
         }, 5000);
       }
 
+
+      // ... [previous JavaScript code remains the same] ...
+
+      // Function to delete job from database and bucket
+      async function deleteJob(jobId) {
+        if (!jobId) return;
+
+        try {
+          const response = await fetch(`/delete-job/${jobId}`, {
+            method: 'DELETE',
+          });
+
+          const data = await response.json();
+
+          if (response.ok) {
+            console.log('Job deleted successfully:', data.message);
+            // Reset the form after successful deletion
+            resetForm();
+          } else {
+            console.error('Failed to delete job:', data.error);
+            // Still reset the form but show error
+            resetForm();
+            alert('Failed to delete job. Please try again.');
+          }
+        } catch (error) {
+          console.error('Error deleting job:', error);
+          resetForm();
+          alert('Error deleting job. Please try again.');
+        }
+      }
+
+      // Update the closePrintModal event handler
+      closePrintModal.addEventListener("click", function () {
+        printModal.style.display = "none";
+
+        // Delete the job if it exists
+        if (jobId) {
+          deleteJob(jobId);
+        } else {
+          printBtn.disabled = false;
+        }
+      });
+
+      // Update the closePaymentBtn event handler
+      closePaymentBtn.addEventListener("click", function () {
+        paymentModal.style.display = "none";
+        paymentForm.innerHTML = "";
+
+        // Delete the job if payment is cancelled
+        if (jobId) {
+          deleteJob(jobId);
+        } else {
+          printBtn.disabled = false;
+        }
+
+        // Clear payment status polling when modal is closed manually
+        if (paymentCheckInterval) {
+          clearInterval(paymentCheckInterval);
+          paymentCheckInterval = null;
+        }
+      });
+
+      // Also update the resetForm function to properly clear jobId
+      function resetForm() {
+        uploadForm.reset();
+        selectedFile = null;
+        jobId = null; // Ensure jobId is reset
+        totalPages = 0;
+        currentPdf = null;
+        printBtn.disabled = true;
+        uploadResult.textContent = "";
+        pdfControls.style.display = 'none';
+        estimatedPriceEl.textContent = "0.00";
+        totalPagesEl.textContent = "-";
+        previewBox.innerHTML = '<p style="color:#888;">No preview yet.</p>';
+
+        // Clear any existing intervals
+        if (paymentCheckInterval) {
+          clearInterval(paymentCheckInterval);
+          paymentCheckInterval = null;
+        }
+      }
+
       // Function to start payment status polling
       function startPaymentStatusPolling(orderId) {
         // Clear any existing interval first
@@ -506,7 +663,6 @@
 
       fileInput.addEventListener("change", (e) => {
         selectedFile = e.target.files[0] || null;
-        uploadBtn.disabled = true;
         printBtn.disabled = true;
         uploadResult.textContent = "";
         pdfControls.style.display = 'none';
@@ -514,7 +670,7 @@
 
         currentPdf = null;
         currentPageNum = 1;
-        
+
         // Trigger auto-preview when file is selected
         triggerAutoPreview();
       });
@@ -529,7 +685,7 @@
         if (autoPreviewTimeout) {
           clearTimeout(autoPreviewTimeout);
         }
-        
+
         // Set a new timeout to trigger preview after user stops typing
         autoPreviewTimeout = setTimeout(() => {
           if (selectedFile) {
@@ -658,7 +814,7 @@
           embed.style.minHeight = "500px";
           previewBox.appendChild(embed);
 
-          uploadBtn.disabled = false;
+          printBtn.disabled = false;
           pageError.style.display = "none";
           pdfControls.style.display = 'none';
         } catch (err) {
@@ -699,7 +855,7 @@
           pdfControls.style.display = 'flex';
           renderPage(1);
 
-          uploadBtn.disabled = false;
+          printBtn.disabled = false;
           pageError.style.display = "none";
         } catch (error) {
           console.error("Error rendering PDF:", error);
@@ -729,12 +885,7 @@
         }
       });
 
-      previewBtn.addEventListener("click", async () => {
-        if (!selectedFile) return alert("Please choose a PDF file first.");
-        generatePreview();
-      });
-
-      uploadBtn.addEventListener("click", async () => {
+      printBtn.addEventListener("click", async function () {
         if (!selectedFile) return alert("No file selected.");
         const pagesVal = pagesInput.value.trim();
 
@@ -747,8 +898,8 @@
         fd.append("sides", "single");
         fd.append("paper_size", "A4");
 
-        uploadResult.textContent = "Uploading...";
-        uploadBtn.disabled = true;
+        uploadResult.textContent = "Processing...";
+        printBtn.disabled = true;
         try {
           const res = await fetch("/upload", { method: "POST", body: fd });
           const data = await res.json();
@@ -757,24 +908,34 @@
             totalPages = data.total_pages || totalPages || 0;
             totalPagesEl.textContent = totalPages || "-";
             estimatedPriceEl.textContent = data.price || "0.00"
-            uploadResult.textContent = `Upload successful. Job ID: ${jobId}. Total pages: ${totalPages}`;
+            uploadResult.textContent = `Processing successful. Job ID: ${jobId}. Total pages: ${totalPages}`;
             uploadResult.style.color = "green";
-            printBtn.disabled = false;
+
+            // Populate the print modal with job details
+            printJobId.textContent = jobId;
+            printTotalPages.textContent = totalPages;
+            printOrientation.textContent = orientationSelect.value;
+            printPageRange.textContent = pagesInput.value.trim() || "All";
+            printTotalAmount.textContent = estimatedPriceEl.textContent;
+
+            // Show the print modal
+            printModal.style.display = "flex";
+
           } else {
-            uploadResult.textContent = `Upload failed: ${data.error || JSON.stringify(data)}`;
+            uploadResult.textContent = `Processing failed: ${data.error || JSON.stringify(data)}`;
             uploadResult.style.color = "red";
-            uploadBtn.disabled = false;
+            printBtn.disabled = false;
           }
         } catch (err) {
-          console.error("Upload error:", err);
-          uploadResult.textContent = `Upload error: ${err.message}`;
+          console.error("Processing error:", err);
+          uploadResult.textContent = `Processing error: ${err.message}`;
           uploadResult.style.color = "red";
-          uploadBtn.disabled = false;
+          printBtn.disabled = false;
         }
       });
 
-      printBtn.addEventListener("click", async () => {
-        if (!jobId) return alert("Please upload and create a job first.");
+      proceedPaymentBtn.addEventListener("click", async function () {
+        if (!jobId) return alert("Please process your file first.");
 
         const payload = {
           job_id: jobId,
@@ -790,9 +951,12 @@
           const data = await res.json();
 
           if (res.ok && data.payment_session_id) {
+            // Hide print modal and show payment modal
+            printModal.style.display = "none";
+
             // Show payment modal
             paymentJobId.textContent = jobId;
-            paymentAmount.textContent =  data.actual_price || data.price || "0.00";
+            paymentAmount.textContent = data.actual_price || data.price || "0.00";
             paymentModal.style.display = "block";
 
             // Store order ID for status checking
@@ -818,10 +982,17 @@
         }
       });
 
+      // Close print modal
+      closePrintModal.addEventListener("click", function () {
+        printModal.style.display = "none";
+        printBtn.disabled = false;
+      });
+
       // Close payment modal
       closePaymentBtn.addEventListener("click", function () {
         paymentModal.style.display = "none";
         paymentForm.innerHTML = "";
+        printBtn.disabled = false;
 
         // Clear payment status polling when modal is closed manually
         if (paymentCheckInterval) {
