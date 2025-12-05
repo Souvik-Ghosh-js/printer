@@ -528,7 +528,6 @@ def upload_pdf():
         print("❌ ERROR: Failed to create any jobs")
         return jsonify({"error": "Failed to create any jobs"}), 500
     
-
 def create_cashfree_payment_session(order_id, order_amount, customer_id, customer_email, customer_phone):
     """Create a payment session with Cashfree"""
     url = "https://api.cashfree.com/pg/orders" if CASHFREE_ENV == "production" else "https://sandbox.cashfree.com/pg/orders"
@@ -544,9 +543,15 @@ def create_cashfree_payment_session(order_id, order_amount, customer_id, custome
     base_url = request.url_root.replace('http://', 'https://')
     return_url = f"{base_url}payment-callback"
     
+    # Ensure order_amount is a float with 2 decimal places
+    try:
+        order_amount_float = float(order_amount)
+    except (ValueError, TypeError):
+        order_amount_float = 0.0
+    
     payload = {
         "order_id": order_id,
-        "order_amount": float(order_amount),
+        "order_amount": round(order_amount_float, 2),
         "order_currency": "INR",
         "order_note": "Print job payment",
         "customer_details": {
@@ -560,9 +565,16 @@ def create_cashfree_payment_session(order_id, order_amount, customer_id, custome
         }
     }
     
+    print(f"💰 Creating Cashfree payment session:")
+    print(f"   Order ID: {order_id}")
+    print(f"   Order Amount: {order_amount_float}")
+    print(f"   Customer ID: {customer_id}")
+    
     try:
         response = requests.post(url, headers=headers, json=payload)
         response_data = response.json()
+        
+        print(f"💰 Cashfree API response: {response.status_code}")
         
         if response.status_code == 200:
             return {
@@ -571,18 +583,19 @@ def create_cashfree_payment_session(order_id, order_amount, customer_id, custome
                 "order_id": order_id
             }
         else:
-            print(f"Cashfree API error: {response.status_code} - {response_data}")
+            print(f"❌ Cashfree API error: {response.status_code} - {response_data}")
             return {
                 "success": False,
                 "error": response_data.get("message", "Unknown error from Cashfree")
             }
     except Exception as e:
-        print(f"Cashfree API exception: {e}")
+        print(f"❌ Cashfree API exception: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "success": False,
             "error": str(e)
         }
-
 @app.route("/create-payment", methods=["POST"])
 def create_payment():
     """Create a payment session for a print job"""
@@ -600,19 +613,28 @@ def create_payment():
         
         job = job_result.data[0]
         customer_id = job.get("customer_id", "customer_123")
-        price_per_copy = job.get("price", "0.00")  # Price for one copy
+        price = job.get("price", "0.00")  # Price for one copy
         copies = job.get("copies", 1)  # Get copies count from database
         
+        # Convert price to float and calculate total
+        try:
+            price_float = float(price)
+        except ValueError:
+            price_float = 0.0
+            
         # Calculate total amount = price per copy × number of copies
-        total_amount = float(price_per_copy) * copies
+        total_amount = price_float * copies
         
-        print(f"💰 Payment calculation: {price_per_copy} × {copies} copies = {total_amount}")
+        print(f"💰 Payment calculation: {price_float} × {copies} copies = {total_amount}")
 
     except Exception as e:
         print(f"Error fetching job: {e}")
+        import traceback
+        traceback.print_exc()
         customer_id = "customer_123"
         total_amount = 0.00
         copies = 1
+        price = "0.00"
     
     # Generate a unique order ID
     order_id = f"JOB_{job_id}_{int(time.time())}"
@@ -627,26 +649,45 @@ def create_payment():
     )
     
     if result["success"]:
-        # Update the job with order ID
+        # Update ALL copies with the same order ID
         try:
-            supabase.table("print_jobs").update({
-                "order_id": order_id,
-                "payment_status": "pending",
-            }).eq("id", job_id).execute()
+            # Get the original filename to find all copies
+            original_filename = job.get("original_filename", "")
+            if "_copy" in original_filename:
+                base_filename = original_filename.split("_copy")[0]
+                
+                # Update all copies for this customer
+                supabase.table("print_jobs") \
+                    .update({
+                        "order_id": order_id,
+                        "payment_status": "pending",
+                    }) \
+                    .eq("customer_id", customer_id) \
+                    .ilike("original_filename", f"{base_filename}%") \
+                    .execute()
+            else:
+                # Update just this job
+                supabase.table("print_jobs") \
+                    .update({
+                        "order_id": order_id,
+                        "payment_status": "pending",
+                    }) \
+                    .eq("id", job_id) \
+                    .execute()
+                    
         except Exception as e:
-            print(f"Error updating job with order ID: {e}")
+            print(f"Error updating jobs with order ID: {e}")
         
         return jsonify({
             "payment_session_id": result["payment_session_id"],
             "order_id": order_id,
-            "price_per_copy": price_per_copy,  # Price for one copy
+            "price_per_copy": price,  # Price for one copy
             "copies": copies,  # Number of copies
             "total_amount": f"{total_amount:.2f}",  # Total amount for all copies
             "mode": CASHFREE_ENV
         })
     else:
-        return jsonify({"error": result["error"]}), 400
-    
+        return jsonify({"error": result["error"]}), 400  
 
 @app.route("/payment-callback", methods=["POST"])
 def payment_webhook():
@@ -757,7 +798,7 @@ def payment_webhook():
         traceback.print_exc()
         return jsonify({"error": "Webhook processing failed"}), 500
     
-    
+
 def verify_webhook_signature(webhook_data, signature):
     """Verify Cashfree webhook signature"""
     if not signature:

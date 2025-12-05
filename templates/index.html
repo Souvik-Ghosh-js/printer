@@ -993,33 +993,40 @@
         }
       });
 
-      proceedPaymentBtn.addEventListener("click", async function () {
-        if (!jobId) return alert("Please process your file first.");
+proceedPaymentBtn.addEventListener("click", async function () {
+    if (!jobId) return alert("Please process your file first.");
 
-        const payload = {
-          job_id: jobId,
-        };
+    const payload = {
+        job_id: jobId,
+    };
 
-        try {
-          const res = await fetch("/create-payment", {
+    try {
+        const res = await fetch("/create-payment", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { 
+                "Content-Type": "application/json" 
+            },
             body: JSON.stringify(payload)
-          });
+        });
 
-          const data = await res.json();
+        if (!res.ok) {
+            const errorData = await res.json().catch(() => ({ error: "Unknown error" }));
+            throw new Error(errorData.error || `HTTP error ${res.status}`);
+        }
 
-          if (res.ok && data.payment_session_id) {
+        const data = await res.json();
+
+        if (data.payment_session_id) {
             // Hide print modal and show payment modal
             printModal.style.display = "none";
 
             // Show payment modal with correct details
             paymentJobId.textContent = jobId;
-
+            
             // Show breakdown if multiple copies
             const copies = parseInt(printCopies.textContent) || 1;
             if (copies > 1) {
-              paymentAmount.innerHTML = `
+                paymentAmount.innerHTML = `
                     <div style="margin-bottom: 10px;">
                         <div>Price per copy: ₹${data.price_per_copy || "0.00"}</div>
                         <div>Copies: ${copies}</div>
@@ -1027,9 +1034,9 @@
                     </div>
                 `;
             } else {
-              paymentAmount.textContent = data.total_amount || "0.00";
+                paymentAmount.textContent = data.total_amount || "0.00";
             }
-
+            
             paymentModal.style.display = "block";
 
             // Store order ID for status checking
@@ -1039,22 +1046,29 @@
             startPaymentStatusPolling(orderId);
 
             // Initialize Cashfree checkout
-            const cashfree = new Cashfree({ mode: "production" });
-
-            cashfree.checkout({
-              paymentSessionId: data.payment_session_id,
-              redirectTarget: "_modal",
-              container: paymentForm
-            });
-          } else {
-            alert("Failed to create payment session: " + (data.error || JSON.stringify(data)));
-          }
-        } catch (err) {
-          console.error("Payment initiation error:", err);
-          alert("Error initiating payment: " + err.message);
+            try {
+                const cashfree = new Cashfree({ mode: data.mode || "production" });
+                
+                cashfree.checkout({
+                    paymentSessionId: data.payment_session_id,
+                    redirectTarget: "_modal",
+                    container: paymentForm
+                });
+            } catch (cashfreeError) {
+                console.error("Cashfree SDK error:", cashfreeError);
+                alert("Error initializing payment: " + cashfreeError.message);
+                paymentModal.style.display = "none";
+            }
+        } else {
+            alert("Failed to create payment session: " + (data.error || "Unknown error"));
         }
-      });
-      // Also check URL parameters for payment status (in case of redirect)
+    } catch (err) {
+        console.error("Payment initiation error:", err);
+        alert("Error initiating payment: " + err.message);
+    }
+});
+
+
       function checkUrlForPaymentStatus() {
         const urlParams = new URLSearchParams(window.location.search);
         const paymentStatus = urlParams.get('payment_status');
