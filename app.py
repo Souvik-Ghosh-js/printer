@@ -528,7 +528,7 @@ def upload_pdf():
         print("❌ ERROR: Failed to create any jobs")
         return jsonify({"error": "Failed to create any jobs"}), 500
     
-    
+
 def create_cashfree_payment_session(order_id, order_amount, customer_id, customer_email, customer_phone):
     """Create a payment session with Cashfree"""
     url = "https://api.cashfree.com/pg/orders" if CASHFREE_ENV == "production" else "https://sandbox.cashfree.com/pg/orders"
@@ -600,19 +600,27 @@ def create_payment():
         
         job = job_result.data[0]
         customer_id = job.get("customer_id", "customer_123")
-        price = job.get("price", "0.00")  # ✅ Get price from database
+        price_per_copy = job.get("price", "0.00")  # Price for one copy
+        copies = job.get("copies", 1)  # Get copies count from database
+        
+        # Calculate total amount = price per copy × number of copies
+        total_amount = float(price_per_copy) * copies
+        
+        print(f"💰 Payment calculation: {price_per_copy} × {copies} copies = {total_amount}")
 
     except Exception as e:
         print(f"Error fetching job: {e}")
         customer_id = "customer_123"
+        total_amount = 0.00
+        copies = 1
     
     # Generate a unique order ID
     order_id = f"JOB_{job_id}_{int(time.time())}"
     
-    # Create payment session with Cashfree
+    # Create payment session with Cashfree with TOTAL amount
     result = create_cashfree_payment_session(
         order_id=order_id,
-        order_amount=price,
+        order_amount=total_amount,  # Pass TOTAL amount for all copies
         customer_id=customer_id,
         customer_email="customer@example.com",  # You should collect this from users
         customer_phone="9999999999"  # You should collect this from users
@@ -631,12 +639,14 @@ def create_payment():
         return jsonify({
             "payment_session_id": result["payment_session_id"],
             "order_id": order_id,
-            "price": price,  # ✅ Return the actual price to frontend
-
+            "price_per_copy": price_per_copy,  # Price for one copy
+            "copies": copies,  # Number of copies
+            "total_amount": f"{total_amount:.2f}",  # Total amount for all copies
             "mode": CASHFREE_ENV
         })
     else:
         return jsonify({"error": result["error"]}), 400
+    
 
 @app.route("/payment-callback", methods=["POST"])
 def payment_webhook():
@@ -679,39 +689,59 @@ def payment_webhook():
         
         payment_status_lower = status_mapping.get(payment_status, "pending")
         
-        # Update the order status in database
+        # Update data for all related jobs
         update_data = {
             "payment_status": payment_status_lower,
             "transaction_id": transaction_id,
         }
         
-        # If payment is successful, update job status
+        # If payment is successful, update job status for ALL copies
         if payment_status == "SUCCESS":
             update_data["status"] = "confirmed"
             update_data["paid_at"] = datetime.now().isoformat()
             print(f"Payment successful for order {order_id}")
+            
         elif payment_status in ["FAILED", "EXPIRED"]:
             update_data["status"] = "uploaded"
             print(f"Payment failed for order {order_id}")
         
         try:
-            # Update the print job in database
-            result = supabase.table("print_jobs").update(update_data).eq("order_id", order_id).execute()
+            # First, get the primary job to find all related copies
+            primary_job_result = supabase.table("print_jobs") \
+                .select("*") \
+                .eq("order_id", order_id) \
+                .execute()
             
-            if not result.data:
+            if not primary_job_result.data:
                 print(f"Order {order_id} not found in database")
                 # Try to find by job ID if order_id contains job ID
                 if "JOB_" in order_id:
                     job_id_part = order_id.split("_")[1]
-                    result = supabase.table("print_jobs").update(update_data).eq("id", job_id_part).execute()
+                    primary_job_result = supabase.table("print_jobs") \
+                        .select("*") \
+                        .eq("id", job_id_part) \
+                        .execute()
                     
-                    if not result.data:
+                    if not primary_job_result.data:
                         print(f"Job ID {job_id_part} also not found in database")
                         return jsonify({"error": "Order/Job not found"}), 404
-                    else:
-                        print(f"Found job by ID: {job_id_part}")
-                else:
-                    return jsonify({"error": "Order not found"}), 404
+            
+            if primary_job_result.data:
+                primary_job = primary_job_result.data[0]
+                customer_id = primary_job.get("customer_id")
+                original_filename = primary_job.get("original_filename", "")
+                
+                # Find the base filename (without _copyX suffix)
+                base_filename = original_filename.split("_copy")[0]
+                
+                # Update ALL copies for this customer with the same base filename
+                update_result = supabase.table("print_jobs") \
+                    .update(update_data) \
+                    .eq("customer_id", customer_id) \
+                    .ilike("original_filename", f"{base_filename}%") \
+                    .execute()
+                
+                print(f"Updated {len(update_result.data if update_result.data else [])} copies for order {order_id}")
                 
             print(f"Successfully updated order {order_id} with status {payment_status_lower}")
             
@@ -726,7 +756,8 @@ def payment_webhook():
         import traceback
         traceback.print_exc()
         return jsonify({"error": "Webhook processing failed"}), 500
-
+    
+    
 def verify_webhook_signature(webhook_data, signature):
     """Verify Cashfree webhook signature"""
     if not signature:

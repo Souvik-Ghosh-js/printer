@@ -805,7 +805,7 @@
           const pricePerCopy = priceHeader || "0.00";
           const copies = parseInt(copiesInput.value) || 1;
           const totalPrice = (parseFloat(pricePerCopy) * copies).toFixed(2);
-          
+
           estimatedPriceEl.textContent = totalPrice;
 
           // Update pricing info to show breakdown
@@ -815,7 +815,7 @@
           const baseRate = totalPages <= 4 ? 3 : 2;
           const basePrice = totalPages * baseRate;
           const highBlackCharge = highBlackPages * 2;
-          
+
           pricingInfoEl.innerHTML = `
     Base price (${totalPages} pages × ₹${baseRate}): ₹${basePrice.toFixed(2)}<br>
     ${highBlackPages > 0 ? `High-black surcharge (${highBlackPages} pages × ₹2): ₹${highBlackCharge.toFixed(2)}<br>` : ''}
@@ -910,14 +910,14 @@
 
       printBtn.addEventListener("click", async function () {
         if (!selectedFile) return alert("No file selected.");
-        
+
         // Validate copies
         const copies = parseInt(copiesInput.value) || 1;
         if (copies < 1 || copies > 20) {
           alert("Please enter a valid number of copies (1-20)");
           return;
         }
-        
+
         const pagesVal = pagesInput.value.trim();
 
         const form = document.getElementById("upload-form");
@@ -935,7 +935,7 @@
         try {
           const res = await fetch("/upload", { method: "POST", body: fd });
           const data = await res.json();
-          
+
           // Check for high black page error
           if (res.status === 400 && data.error && data.error.includes("high black content")) {
             uploadResult.innerHTML = `
@@ -947,13 +947,14 @@
             printBtn.disabled = false;
             return;
           }
-          
+
+          // In the printBtn click handler, update the modal population:
           if (res.ok && data.primary_job_id) {
             jobId = data.primary_job_id;
             totalPages = data.total_pages || totalPages || 0;
             totalPagesEl.textContent = totalPages || "-";
             estimatedPriceEl.textContent = data.total_price || "0.00";
-            
+
             uploadResult.textContent = `Processing successful. Created ${data.copies} job(s). Primary Job ID: ${jobId}. Total pages: ${totalPages}`;
             uploadResult.style.color = "green";
 
@@ -964,11 +965,21 @@
             printOrientation.textContent = orientationSelect.value;
             printPageRange.textContent = pagesInput.value.trim() || "All";
             printPricePerCopy.textContent = data.price_per_copy || "0.00";
-            printTotalAmount.textContent = data.total_price || "0.00";
+
+            // Show price breakdown if multiple copies
+            if (copies > 1) {
+              printTotalAmount.innerHTML = `
+            <div>
+                <div>₹${data.price_per_copy || "0.00"} × ${copies} copies</div>
+                <div><strong>Total: ₹${data.total_price || "0.00"}</strong></div>
+            </div>
+        `;
+            } else {
+              printTotalAmount.textContent = data.total_price || "0.00";
+            }
 
             // Show the print modal
             printModal.style.display = "flex";
-
           } else {
             uploadResult.textContent = `Processing failed: ${data.error || JSON.stringify(data)}`;
             uploadResult.style.color = "red";
@@ -1002,9 +1013,23 @@
             // Hide print modal and show payment modal
             printModal.style.display = "none";
 
-            // Show payment modal
+            // Show payment modal with correct details
             paymentJobId.textContent = jobId;
-            paymentAmount.textContent = data.actual_price || data.price || "0.00";
+
+            // Show breakdown if multiple copies
+            const copies = parseInt(printCopies.textContent) || 1;
+            if (copies > 1) {
+              paymentAmount.innerHTML = `
+                    <div style="margin-bottom: 10px;">
+                        <div>Price per copy: ₹${data.price_per_copy || "0.00"}</div>
+                        <div>Copies: ${copies}</div>
+                        <div><strong>Total Amount: ₹${data.total_amount || "0.00"}</strong></div>
+                    </div>
+                `;
+            } else {
+              paymentAmount.textContent = data.total_amount || "0.00";
+            }
+
             paymentModal.style.display = "block";
 
             // Store order ID for status checking
@@ -1029,7 +1054,6 @@
           alert("Error initiating payment: " + err.message);
         }
       });
-
       // Also check URL parameters for payment status (in case of redirect)
       function checkUrlForPaymentStatus() {
         const urlParams = new URLSearchParams(window.location.search);
