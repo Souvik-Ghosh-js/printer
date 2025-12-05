@@ -84,7 +84,8 @@
 
     input[type="file"],
     select,
-    input[type="text"] {
+    input[type="text"],
+    input[type="number"] {
       width: 100%;
       padding: 10px;
       border: 1px solid #ddd;
@@ -97,7 +98,8 @@
 
     input[type="file"]:hover,
     select:hover,
-    input[type="text"]:hover {
+    input[type="text"]:hover,
+    input[type="number"]:hover {
       border-color: #007bff;
     }
 
@@ -322,6 +324,17 @@
       background: #e74c3c;
       color: white;
     }
+
+    /* Black page error alert */
+    .black-page-error {
+      color: #721c24;
+      background-color: #f8d7da;
+      border: 1px solid #f5c6cb;
+      padding: 12px;
+      border-radius: 6px;
+      margin: 10px 0;
+      font-size: 14px;
+    }
   </style>
   <!-- PDF.js library for mobile devices -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
@@ -351,6 +364,12 @@
         <label>Page range</label>
         <input type="text" name="pages" id="pages" placeholder="e.g. 1-3,5 or 2,4,6">
         <div id="page-error" class="error-text">Invalid page range (use numbers and ranges, e.g. 1,3,5-7)</div>
+
+        <label>Number of Copies</label>
+        <input type="number" name="copies" id="copies" min="1" max="20" value="1">
+        <div class="info-box">
+          Number of identical copies to print. Each copy will be treated as a separate print job.
+        </div>
 
         <div class="info-box">
           Preview your selected settings before printing. After preview, total page count will be displayed.
@@ -394,8 +413,10 @@
       <div class="print-summary">
         <p><strong>Job ID:</strong> <span id="print-job-id">-</span></p>
         <p><strong>Total Pages:</strong> <span id="print-total-pages">-</span></p>
+        <p><strong>Copies:</strong> <span id="print-copies">1</span></p>
         <p><strong>Orientation:</strong> <span id="print-orientation">-</span></p>
         <p><strong>Page Range:</strong> <span id="print-page-range">All</span></p>
+        <p><strong>Price per Copy:</strong> ₹<span id="print-price-per-copy">0.00</span></p>
         <p><strong>Total Amount:</strong> ₹<span id="print-total-amount">0.00</span></p>
       </div>
       <p>Please review your print job details above. Click "Proceed to Payment" to continue.</p>
@@ -449,6 +470,7 @@
       const estimatedPriceEl = document.getElementById("estimated-price");
       const pricingInfoEl = document.getElementById("pricing-info");
       const pagesInput = document.getElementById("pages");
+      const copiesInput = document.getElementById("copies");
       const pageError = document.getElementById("page-error");
       const uploadResult = document.getElementById("upload-result");
       const pdfControls = document.getElementById("pdf-controls");
@@ -460,8 +482,10 @@
       const printModal = document.getElementById("print-modal");
       const printJobId = document.getElementById("print-job-id");
       const printTotalPages = document.getElementById("print-total-pages");
+      const printCopies = document.getElementById("print-copies");
       const printOrientation = document.getElementById("print-orientation");
       const printPageRange = document.getElementById("print-page-range");
+      const printPricePerCopy = document.getElementById("print-price-per-copy");
       const printTotalAmount = document.getElementById("print-total-amount");
       const closePrintModal = document.getElementById("close-print-modal");
       const proceedPaymentBtn = document.getElementById("proceed-payment-btn");
@@ -481,7 +505,7 @@
       // CORRECTED PRICING LOGIC: 
       // 4 or fewer pages: ₹3 per page
       // More than 4 pages: ₹2 per page
-      function calculatePrice(totalPages, highBlackPages = 0) {
+      function calculatePrice(totalPages, highBlackPages = 0, copies = 1) {
         if (!totalPages || totalPages <= 0) return "0.00";
 
         // Base pricing for ALL pages: 4 or fewer pages - ₹3 per page, More than 4 pages - ₹2 per page
@@ -491,7 +515,14 @@
         // Additional ₹2 per high black page
         const highBlackCharge = highBlackPages * 2;
 
-        return (basePrice + highBlackCharge).toFixed(2);
+        // Price for one copy
+        const pricePerCopy = basePrice + highBlackCharge;
+
+        // Total for all copies
+        return {
+          perCopy: pricePerCopy.toFixed(2),
+          total: (pricePerCopy * copies).toFixed(2)
+        };
       }
 
       // Reset form to default values
@@ -561,9 +592,6 @@
         }, 5000);
       }
 
-
-      // ... [previous JavaScript code remains the same] ...
-
       // Function to delete job from database and bucket
       async function deleteJob(jobId) {
         if (!jobId) return;
@@ -623,27 +651,6 @@
         }
       });
 
-      // Also update the resetForm function to properly clear jobId
-      function resetForm() {
-        uploadForm.reset();
-        selectedFile = null;
-        jobId = null; // Ensure jobId is reset
-        totalPages = 0;
-        currentPdf = null;
-        printBtn.disabled = true;
-        uploadResult.textContent = "";
-        pdfControls.style.display = 'none';
-        estimatedPriceEl.textContent = "0.00";
-        totalPagesEl.textContent = "-";
-        previewBox.innerHTML = '<p style="color:#888;">No preview yet.</p>';
-
-        // Clear any existing intervals
-        if (paymentCheckInterval) {
-          clearInterval(paymentCheckInterval);
-          paymentCheckInterval = null;
-        }
-      }
-
       // Function to start payment status polling
       function startPaymentStatusPolling(orderId) {
         // Clear any existing interval first
@@ -678,6 +685,7 @@
       // Add event listeners for auto-preview
       orientationSelect.addEventListener("change", triggerAutoPreview);
       pagesInput.addEventListener("input", triggerAutoPreview);
+      copiesInput.addEventListener("change", triggerAutoPreview);
 
       // Auto-preview function with debouncing
       function triggerAutoPreview() {
@@ -773,6 +781,7 @@
         const fd = new FormData();
         fd.append("file", selectedFile);
         fd.append("orientation", form.orientation.value || "portrait");
+        fd.append("copies", copiesInput.value || "1");
         fd.append("pages", pagesInput.value.trim());
 
         previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Generating preview...</p></div>`;
@@ -793,16 +802,27 @@
           totalPagesEl.textContent = !isNaN(totalPages) && totalPages > 0 ? totalPages : "-";
 
           // Use the price calculated by the server with new logic
-          estimatedPriceEl.textContent = priceHeader || "0.00";
+          const pricePerCopy = priceHeader || "0.00";
+          const copies = parseInt(copiesInput.value) || 1;
+          const totalPrice = (parseFloat(pricePerCopy) * copies).toFixed(2);
+          
+          estimatedPriceEl.textContent = totalPrice;
 
           // Update pricing info to show breakdown
           const highBlackPages = highBlackPagesHeader ? parseInt(highBlackPagesHeader, 10) : 0;
           const normalPages = normalPagesHeader ? parseInt(normalPagesHeader, 10) : totalPages;
 
+          const baseRate = totalPages <= 4 ? 3 : 2;
+          const basePrice = totalPages * baseRate;
+          const highBlackCharge = highBlackPages * 2;
+          
           pricingInfoEl.innerHTML = `
-    Base price (${totalPages} pages × ₹${totalPages <= 4 ? '3' : '2'}): ₹${(totalPages * (totalPages <= 4 ? 3 : 2)).toFixed(2)}<br>
-    ${highBlackPages > 0 ? `High-black surcharge (${highBlackPages} pages × ₹2): ₹${(highBlackPages * 2).toFixed(2)}` : ''}
+    Base price (${totalPages} pages × ₹${baseRate}): ₹${basePrice.toFixed(2)}<br>
+    ${highBlackPages > 0 ? `High-black surcharge (${highBlackPages} pages × ₹2): ₹${highBlackCharge.toFixed(2)}<br>` : ''}
+    Price per copy: ₹${pricePerCopy}<br>
+    ${copies > 1 ? `Total for ${copies} copies: ₹${totalPrice}` : ''}
 `;
+
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
           previewBox.innerHTML = "";
@@ -829,6 +849,7 @@
           const fd = new FormData();
           fd.append("file", file);
           fd.append("orientation", form.orientation.value || "portrait");
+          fd.append("copies", copiesInput.value || "1");
           fd.append("pages", pagesInput.value.trim());
 
           previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Loading PDF...</p></div>`;
@@ -845,7 +866,9 @@
           totalPagesEl.textContent = totalPages || "-";
 
           // Update estimated price with corrected pricing logic
-          estimatedPriceEl.textContent = calculatePrice(totalPages);
+          const copies = parseInt(copiesInput.value) || 1;
+          const price = calculatePrice(totalPages, 0, copies);
+          estimatedPriceEl.textContent = price.total;
 
           const arrayBuffer = await res.arrayBuffer();
           const typedarray = new Uint8Array(arrayBuffer);
@@ -887,6 +910,14 @@
 
       printBtn.addEventListener("click", async function () {
         if (!selectedFile) return alert("No file selected.");
+        
+        // Validate copies
+        const copies = parseInt(copiesInput.value) || 1;
+        if (copies < 1 || copies > 20) {
+          alert("Please enter a valid number of copies (1-20)");
+          return;
+        }
+        
         const pagesVal = pagesInput.value.trim();
 
         const form = document.getElementById("upload-form");
@@ -894,6 +925,7 @@
         fd.append("file", selectedFile);
         fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
         fd.append("orientation", form.orientation.value);
+        fd.append("copies", copies);
         fd.append("pages", pagesVal);
         fd.append("sides", "single");
         fd.append("paper_size", "A4");
@@ -903,20 +935,36 @@
         try {
           const res = await fetch("/upload", { method: "POST", body: fd });
           const data = await res.json();
-          if (res.ok && data.job_id) {
-            jobId = data.job_id;
+          
+          // Check for high black page error
+          if (res.status === 400 && data.error && data.error.includes("high black content")) {
+            uploadResult.innerHTML = `
+              <div class="black-page-error">
+                <strong>❌ Cannot Print:</strong> ${data.error}<br>
+                <small>Pages with >80% black: ${data.black_pages?.join(', ') || 'Unknown'}</small>
+              </div>
+            `;
+            printBtn.disabled = false;
+            return;
+          }
+          
+          if (res.ok && data.primary_job_id) {
+            jobId = data.primary_job_id;
             totalPages = data.total_pages || totalPages || 0;
             totalPagesEl.textContent = totalPages || "-";
-            estimatedPriceEl.textContent = data.price || "0.00"
-            uploadResult.textContent = `Processing successful. Job ID: ${jobId}. Total pages: ${totalPages}`;
+            estimatedPriceEl.textContent = data.total_price || "0.00";
+            
+            uploadResult.textContent = `Processing successful. Created ${data.copies} job(s). Primary Job ID: ${jobId}. Total pages: ${totalPages}`;
             uploadResult.style.color = "green";
 
             // Populate the print modal with job details
             printJobId.textContent = jobId;
             printTotalPages.textContent = totalPages;
+            printCopies.textContent = copies;
             printOrientation.textContent = orientationSelect.value;
             printPageRange.textContent = pagesInput.value.trim() || "All";
-            printTotalAmount.textContent = estimatedPriceEl.textContent;
+            printPricePerCopy.textContent = data.price_per_copy || "0.00";
+            printTotalAmount.textContent = data.total_price || "0.00";
 
             // Show the print modal
             printModal.style.display = "flex";
@@ -979,40 +1027,6 @@
         } catch (err) {
           console.error("Payment initiation error:", err);
           alert("Error initiating payment: " + err.message);
-        }
-      });
-
-      // Close print modal
-      closePrintModal.addEventListener("click", function () {
-        printModal.style.display = "none";
-        printBtn.disabled = false;
-      });
-
-      // Close payment modal
-      closePaymentBtn.addEventListener("click", function () {
-        paymentModal.style.display = "none";
-        paymentForm.innerHTML = "";
-        printBtn.disabled = false;
-
-        // Clear payment status polling when modal is closed manually
-        if (paymentCheckInterval) {
-          clearInterval(paymentCheckInterval);
-          paymentCheckInterval = null;
-        }
-      });
-
-      // Listen for payment success events from Cashfree SDK
-      window.addEventListener("message", function (event) {
-        if (event.data && event.data.type === "PAYMENT_SUCCESS") {
-          handlePaymentSuccess();
-        } else if (event.data && event.data.type === "PAYMENT_FAILED") {
-          alert("Payment failed. Please try again.");
-
-          // Stop polling if payment failed
-          if (paymentCheckInterval) {
-            clearInterval(paymentCheckInterval);
-            paymentCheckInterval = null;
-          }
         }
       });
 

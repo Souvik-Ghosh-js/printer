@@ -154,47 +154,50 @@ def analyze_pdf_page_content(pdf_bytes, page_range=None, dpi=150):
 
 @app.route("/delete-job/<job_id>", methods=["DELETE"])
 def delete_job(job_id):
-    """Delete a job from database and storage bucket"""
+    """Delete a single job copy"""
     try:
         print(f"🗑️  Deleting job: {job_id}")
         
-        # Get job details from database first
-        job_result = supabase.table("print_jobs").select("file_url, original_filename").eq("id", job_id).execute()
+        # Get job details
+        job_result = supabase.table("print_jobs").select("*").eq("id", job_id).execute()
         
         if not job_result.data:
             print(f"❌ Job {job_id} not found in database")
             return jsonify({"error": "Job not found"}), 404
         
         job = job_result.data[0]
-        file_url = job.get("file_url")
-        filename = job.get("original_filename")
         
-        print(f"📁 Job file URL: {file_url}")
+        # Check if this is the last copy of the file
+        original_filename_base = job.get("original_filename", "").replace("_copy", ".")
+        base_name = original_filename_base.split("_copy")[0]
         
-        # Extract filename from URL for storage deletion
-        if file_url:
-            # Extract the actual storage filename from the URL
-            # URL format: https://fgksbxrxskwchjyqxpvx.supabase.co/storage/v1/object/public/pdfs/filename.pdf
-            if "/pdfs/" in file_url:
-                storage_filename = file_url.split("/pdfs/")[-1]
-                print(f"🗂️  Storage filename to delete: {storage_filename}")
-                
-                # Delete from Supabase storage
-                try:
-                    delete_result = supabase.storage.from_("pdfs").remove([storage_filename])
-                    print(f"✅ Storage deletion result: {delete_result}")
-                except Exception as storage_error:
-                    print(f"⚠️  Storage deletion warning: {storage_error}")
-                    # Continue with DB deletion even if storage deletion fails
+        # Count remaining copies
+        count_result = supabase.table("print_jobs") \
+            .select("id", count="exact") \
+            .ilike("original_filename", f"{base_name}%") \
+            .execute()
+        
+        remaining_copies = count_result.count
         
         # Delete from database
         delete_db_result = supabase.table("print_jobs").delete().eq("id", job_id).execute()
         
         if delete_db_result.data:
-            print(f"✅ Successfully deleted job {job_id} from database")
+            print(f"✅ Successfully deleted job {job_id}")
+            
+            # If this was the last copy, delete from storage
+            if remaining_copies <= 1:
+                file_url = job.get("file_url")
+                if file_url and "/pdfs/" in file_url:
+                    storage_filename = file_url.split("/pdfs/")[-1]
+                    try:
+                        supabase.storage.from_("pdfs").remove([storage_filename])
+                        print(f"✅ Also deleted file from storage")
+                    except Exception as storage_error:
+                        print(f"⚠️  Storage deletion warning: {storage_error}")
+            
             return jsonify({"message": "Job deleted successfully"})
         else:
-            print(f"❌ Failed to delete job {job_id} from database")
             return jsonify({"error": "Failed to delete job from database"}), 500
             
     except Exception as e:
@@ -202,7 +205,6 @@ def delete_job(job_id):
         import traceback
         traceback.print_exc()
         return jsonify({"error": "Deletion failed", "detail": str(e)}), 500
-    
 
     
 def calculate_price_v2(total_pages, high_black_pages, normal_pages):
@@ -358,6 +360,18 @@ def upload_pdf():
         print("❌ ERROR: Missing file or customer_id")
         return jsonify({"error": "Missing file or customer_id"}), 400
 
+    # Get copies from request, default to 1
+    try:
+        copies = int(request.form.get("copies", 1))
+        if copies < 1:
+            copies = 1
+        elif copies > 20:  # Limit to 20 copies maximum
+            copies = 20
+    except:
+        copies = 1
+    
+    print(f"📁 Copies requested: {copies}")
+
     original_filename = secure_filename(file.filename)
     filename = f"{uuid.uuid4()}_{original_filename}"
     
@@ -394,6 +408,22 @@ def upload_pdf():
         analysis_result = analyze_pdf_page_content(file_bytes, selected_indices)
         print(f"📊 Analysis result: {analysis_result}")
         
+        # Check for high black pages (>80%) - REJECT if found
+        high_black_threshold = 80
+        too_high_black_pages = []
+        for page in analysis_result['page_analysis']:
+            if page['black_percent'] > high_black_threshold:
+                too_high_black_pages.append(page['page_number'])
+        
+        if too_high_black_pages:
+            print(f"❌ PDF has pages with >{high_black_threshold}% black content")
+            return jsonify({
+                "error": f"PDF contains pages with very high black content (>80%). Cannot print.",
+                "black_pages": too_high_black_pages,
+                "black_percentages": [page['black_percent'] for page in analysis_result['page_analysis'] 
+                                     if page['black_percent'] > high_black_threshold]
+            }), 400
+        
         # Calculate price with new logic
         price = calculate_price_v2(
             analysis_result['total_pages'],
@@ -415,7 +445,8 @@ def upload_pdf():
         analysis_result = {
             'total_pages': total_pages,
             'high_black_pages': 0,
-            'normal_pages': total_pages
+            'normal_pages': total_pages,
+            'page_analysis': []
         }
         print(f"🔄 Fallback values - Total pages: {total_pages}, Price: ₹{price}")
 
@@ -435,51 +466,69 @@ def upload_pdf():
     
     print(f"📋 Final settings - Sides: {sides}, Paper size: {paper_size}")
 
-    job_payload = {
-        "customer_id": customer_id,
-        "file_url": file_url,
-        "original_filename": original_filename,
-        "status": "uploaded",
-        "total_pages": total_pages,
-        "sides": sides,
-        "orientation": orientation,
-        "color_mode": color_mode,
-        "paper_size": paper_size,
-        "page_range": page_range_str,
-        "price": price,
-        "payment_status": "pending",
-        "created_at": datetime.now().isoformat()
-    }
+    # Prepare base filename without extension
+    original_base = original_filename.rsplit('.', 1)[0] if '.' in original_filename else original_filename
+    original_ext = original_filename.rsplit('.', 1)[1] if '.' in original_filename else 'pdf'
+    
+    # Create multiple job entries for copies
+    created_jobs = []
+    for copy_num in range(1, copies + 1):
+        job_payload = {
+            "customer_id": customer_id,
+            "file_url": file_url,  # Same URL for all copies
+            "original_filename": f"{original_base}_copy{copy_num}.{original_ext}",
+            "status": "uploaded",
+            "total_pages": total_pages,
+            "sides": sides,
+            "orientation": orientation,
+            "color_mode": color_mode,
+            "paper_size": paper_size,
+            "page_range": page_range_str,
+            "price": price,
+            "payment_status": "pending",
+            "copies": copies,
+            "copy_number": copy_num,
+            "created_at": datetime.now().isoformat()
+        }
 
-    print("💾 Storing job in database...")
-    try:
-        job = supabase.table("print_jobs").insert(job_payload).execute()
-        created = job.data[0] if job.data else None
+        print(f"💾 Storing copy {copy_num}/{copies} in database...")
+        try:
+            job = supabase.table("print_jobs").insert(job_payload).execute()
+            if job.data:
+                created = job.data[0]
+                created_jobs.append({
+                    "job_id": created.get("id"),
+                    "copy_number": copy_num
+                })
+                print(f"✅ Database insert successful for copy {copy_num} - Job ID: {created.get('id')}")
+        except Exception as e:
+            print(f"❌ ERROR: DB insert failed for copy {copy_num}: {e}")
+
+    if created_jobs:
+        # Calculate total price for all copies
+        total_price = float(price) * copies
         
-        if created:
-            print(f"✅ Database insert successful - Job ID: {created.get('id')}")
-            response_data = {
-                "job_id": created.get("id"),
-                "file_url": file_url,
-                "total_pages": total_pages,
-                "high_black_pages": analysis_result['high_black_pages'],
-                "normal_pages": analysis_result['normal_pages'],
-                "price": price
-            }
-            print(f"📦 Response data: {response_data}")
-            print("=== UPLOAD PROCESS COMPLETED SUCCESSFULLY ===")
-            return jsonify(response_data)
-        else:
-            print("❌ ERROR: Failed to create job - No data returned from database")
-            return jsonify({"error": "Failed to create job"}), 500
-            
-    except Exception as e:
-        print(f"❌ ERROR: DB insert failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": "DB insert failed", "detail": str(e)}), 500
-# ... [Keep the existing payment-related functions unchanged - create_cashfree_payment_session, create_payment, payment_webhook, verify_webhook_signature, check_payment_status] ...
-
+        response_data = {
+            "job_ids": [job["job_id"] for job in created_jobs],
+            "primary_job_id": created_jobs[0]["job_id"],  # First job ID for backward compatibility
+            "copies": copies,
+            "file_url": file_url,
+            "total_pages": total_pages,
+            "high_black_pages": analysis_result['high_black_pages'],
+            "normal_pages": analysis_result['normal_pages'],
+            "price_per_copy": price,
+            "total_price": f"{total_price:.2f}"
+        }
+        
+        print(f"📦 Response data: {response_data}")
+        print(f"✅ Created {len(created_jobs)} job(s) for {copies} copy(ies)")
+        print("=== UPLOAD PROCESS COMPLETED SUCCESSFULLY ===")
+        return jsonify(response_data)
+    else:
+        print("❌ ERROR: Failed to create any jobs")
+        return jsonify({"error": "Failed to create any jobs"}), 500
+    
+    
 def create_cashfree_payment_session(order_id, order_amount, customer_id, customer_email, customer_phone):
     """Create a payment session with Cashfree"""
     url = "https://api.cashfree.com/pg/orders" if CASHFREE_ENV == "production" else "https://sandbox.cashfree.com/pg/orders"
