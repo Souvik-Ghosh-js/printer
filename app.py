@@ -31,7 +31,7 @@ WEBHOOK_SECRET = "x191i9m9ymo4skygxh2z"
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
-def analyze_image_bw_percentage(image_array, threshold_fraction=0.90):
+def analyze_image_bw_percentage(image_array, threshold_fraction=0.70):
     """
     Analyzes an image array and calculates the percentage of black and white pixels
     using the new threshold fraction logic.
@@ -109,7 +109,7 @@ def analyze_pdf_page_content(pdf_bytes, page_range=None, dpi=150):
                 img_array = img_data.reshape(pix.height, pix.width, pix.n)
                 
                 # Analyze black percentage
-                black_percent, white_percent = analyze_image_bw_percentage(img_array, threshold_fraction=0.90)
+                black_percent, white_percent = analyze_image_bw_percentage(img_array, threshold_fraction=0.70)
                 
                 # Determine if page has high black content (>50%)
                 is_high_black = black_percent > 30
