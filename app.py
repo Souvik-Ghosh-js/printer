@@ -408,8 +408,8 @@ def upload_pdf():
         analysis_result = analyze_pdf_page_content(file_bytes, selected_indices)
         print(f"📊 Analysis result: {analysis_result}")
         
-        # Check for high black pages (>80%) - REJECT if found
-        high_black_threshold = 80
+        # Check for high black pages (>65%) - REJECT if found
+        high_black_threshold = 65
         too_high_black_pages = []
         for page in analysis_result['page_analysis']:
             if page['black_percent'] > high_black_threshold:
@@ -418,7 +418,7 @@ def upload_pdf():
         if too_high_black_pages:
             print(f"❌ PDF has pages with >{high_black_threshold}% black content")
             return jsonify({
-                "error": f"PDF contains pages with very high black content (>80%). Cannot print.",
+                "error": f"PDF contains pages with very high black content (>65%). Cannot print.",
                 "black_pages": too_high_black_pages,
                 "black_percentages": [page['black_percent'] for page in analysis_result['page_analysis'] 
                                      if page['black_percent'] > high_black_threshold]

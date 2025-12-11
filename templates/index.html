@@ -941,7 +941,7 @@
             uploadResult.innerHTML = `
               <div class="black-page-error">
                 <strong>❌ Cannot Print:</strong> ${data.error}<br>
-                <small>Pages with >80% black: ${data.black_pages?.join(', ') || 'Unknown'}</small>
+                <small>Pages with >65% black: ${data.black_pages?.join(', ') || 'Unknown'}</small>
               </div>
             `;
             printBtn.disabled = false;
