@@ -18,8 +18,8 @@ import cv2
 import numpy as np
 
 # --- Supabase Config ---
-SUPABASE_URL = "https://fgksbxrxskwchjyqxpvx.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZna3NieHJ4c2t3Y2hqeXF4cHZ4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjgxODM5MSwiZXhwIjoyMDcyMzk0MzkxfQ.l5Uujx1rpnVMGCukQtrYDP2n_RcCDMC5mlcCES8rBTc"
+SUPABASE_URL = "https://clhtbadtgwckmbvtoynh.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsaHRiYWR0Z3dja21idnRveW5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxNzEwNjYsImV4cCI6MjA5NDc0NzA2Nn0.UCTlbFbtqW-VoFYFRxM0Yhe6RIzgDPIZdPA3sGiwHnE"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Cashfree Config ---
