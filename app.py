@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify, render_template, send_file
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
-from supabase import create_client
 import uuid
 import mimetypes
 from PyPDF2 import PdfReader, PdfWriter
@@ -17,10 +16,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 
-# --- Supabase Config ---
-SUPABASE_URL = "https://clhtbadtgwckmbvtoynh.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsaHRiYWR0Z3dja21idnRveW5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxNzEwNjYsImV4cCI6MjA5NDc0NzA2Nn0.UCTlbFbtqW-VoFYFRxM0Yhe6RIzgDPIZdPA3sGiwHnE"
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+import db
 
 # --- Cashfree Config ---
 CASHFREE_APP_ID = "1081246de8c8aebb039c1d380b76421801"
@@ -30,6 +26,18 @@ WEBHOOK_SECRET = "x191i9m9ymo4skygxh2z"
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
+
+@app.route("/files/<path:storage_key>")
+def serve_file(storage_key):
+    """Serve a stored PDF to the shop-PC worker (token-guarded)."""
+    if request.args.get("token") != db.FILE_TOKEN:
+        return jsonify({"error": "forbidden"}), 403
+    safe = secure_filename(storage_key)
+    path = db.storage_path(safe)
+    if not os.path.exists(path):
+        return jsonify({"error": "not found"}), 404
+    return send_file(path)
 
 def analyze_image_bw_percentage(image_array, threshold_fraction=0.70):
     """
@@ -159,43 +167,31 @@ def delete_job(job_id):
         print(f"🗑️  Deleting job: {job_id}")
         
         # Get job details
-        job_result = supabase.table("print_jobs").select("*").eq("id", job_id).execute()
-        
-        if not job_result.data:
+        job = db.get_job(job_id)
+
+        if not job:
             print(f"❌ Job {job_id} not found in database")
             return jsonify({"error": "Job not found"}), 404
-        
-        job = job_result.data[0]
-        
+
         # Check if this is the last copy of the file
-        original_filename_base = job.get("original_filename", "").replace("_copy", ".")
-        base_name = original_filename_base.split("_copy")[0]
-        
+        base_name = job.get("original_filename", "").split("_copy")[0]
+
         # Count remaining copies
-        count_result = supabase.table("print_jobs") \
-            .select("id", count="exact") \
-            .ilike("original_filename", f"{base_name}%") \
-            .execute()
-        
-        remaining_copies = count_result.count
-        
+        remaining_copies = db.count_by_filename_prefix(base_name)
+
         # Delete from database
-        delete_db_result = supabase.table("print_jobs").delete().eq("id", job_id).execute()
-        
-        if delete_db_result.data:
+        deleted = db.delete_job(job_id)
+
+        if deleted:
             print(f"✅ Successfully deleted job {job_id}")
-            
-            # If this was the last copy, delete from storage
+
+            # If this was the last copy, delete the stored file
             if remaining_copies <= 1:
-                file_url = job.get("file_url")
-                if file_url and "/pdfs/" in file_url:
-                    storage_filename = file_url.split("/pdfs/")[-1]
-                    try:
-                        supabase.storage.from_("pdfs").remove([storage_filename])
+                storage_key = job.get("storage_key")
+                if storage_key:
+                    if db.storage_remove(storage_key):
                         print(f"✅ Also deleted file from storage")
-                    except Exception as storage_error:
-                        print(f"⚠️  Storage deletion warning: {storage_error}")
-            
+
             return jsonify({"message": "Job deleted successfully"})
         else:
             return jsonify({"error": "Failed to delete job from database"}), 500
@@ -450,15 +446,15 @@ def upload_pdf():
         }
         print(f"🔄 Fallback values - Total pages: {total_pages}, Price: ₹{price}")
 
-    # --- Upload to Supabase Storage ---
-    print("☁️  Uploading to Supabase storage...")
+    # --- Save to local storage (instance SSD) ---
+    print("💾 Saving to local storage...")
     try:
-        upload_result = supabase.storage.from_("pdfs").upload(filename, filtered_pdf_bytes, {"content-type": mime_type})
-        file_url = supabase.storage.from_("pdfs").get_public_url(filename)
-        print(f"✅ Storage upload successful: {file_url}")
+        storage_key = db.storage_save(filename, filtered_pdf_bytes)
+        file_url = db.public_url(storage_key)
+        print(f"✅ Storage save successful: {file_url}")
     except Exception as e:
-        print(f"❌ ERROR: Storage upload failed: {e}")
-        return jsonify({"error": "Storage upload failed", "detail": str(e)}), 500
+        print(f"❌ ERROR: Storage save failed: {e}")
+        return jsonify({"error": "Storage save failed", "detail": str(e)}), 500
 
     # Gather settings & store in DB
     sides = request.form.get("sides", "single")
@@ -476,6 +472,7 @@ def upload_pdf():
         job_payload = {
             "customer_id": customer_id,
             "file_url": file_url,  # Same URL for all copies
+            "storage_key": storage_key,
             "original_filename": f"{original_base}_copy{copy_num}.{original_ext}",
             "status": "uploaded",
             "total_pages": total_pages,
@@ -488,19 +485,17 @@ def upload_pdf():
             "payment_status": "pending",
             "copies": copies,
             "copy_number": copy_num,
-            "created_at": datetime.now().isoformat()
         }
 
         print(f"💾 Storing copy {copy_num}/{copies} in database...")
         try:
-            job = supabase.table("print_jobs").insert(job_payload).execute()
-            if job.data:
-                created = job.data[0]
+            new_id = db.insert_job(job_payload)
+            if new_id:
                 created_jobs.append({
-                    "job_id": created.get("id"),
+                    "job_id": new_id,
                     "copy_number": copy_num
                 })
-                print(f"✅ Database insert successful for copy {copy_num} - Job ID: {created.get('id')}")
+                print(f"✅ Database insert successful for copy {copy_num} - Job ID: {new_id}")
         except Exception as e:
             print(f"❌ ERROR: DB insert failed for copy {copy_num}: {e}")
 
@@ -607,11 +602,10 @@ def create_payment():
     
     # Get job details from database
     try:
-        job_result = supabase.table("print_jobs").select("*").eq("id", job_id).execute()
-        if not job_result.data:
+        job = db.get_job(job_id)
+        if not job:
             return jsonify({"error": "Job not found"}), 404
-        
-        job = job_result.data[0]
+
         customer_id = job.get("customer_id", "customer_123")
         price = job.get("price", "0.00")  # Price for one copy
         copies = job.get("copies", 1)  # Get copies count from database
@@ -655,25 +649,18 @@ def create_payment():
             original_filename = job.get("original_filename", "")
             if "_copy" in original_filename:
                 base_filename = original_filename.split("_copy")[0]
-                
+
                 # Update all copies for this customer
-                supabase.table("print_jobs") \
-                    .update({
-                        "order_id": order_id,
-                        "payment_status": "pending",
-                    }) \
-                    .eq("customer_id", customer_id) \
-                    .ilike("original_filename", f"{base_filename}%") \
-                    .execute()
+                db.update_jobs_by_customer_and_prefix(
+                    customer_id, base_filename,
+                    {"order_id": order_id, "payment_status": "pending"},
+                )
             else:
                 # Update just this job
-                supabase.table("print_jobs") \
-                    .update({
-                        "order_id": order_id,
-                        "payment_status": "pending",
-                    }) \
-                    .eq("id", job_id) \
-                    .execute()
+                db.update_job(
+                    job_id,
+                    {"order_id": order_id, "payment_status": "pending"},
+                )
                     
         except Exception as e:
             print(f"Error updating jobs with order ID: {e}")
@@ -739,7 +726,7 @@ def payment_webhook():
         # If payment is successful, update job status for ALL copies
         if payment_status == "SUCCESS":
             update_data["status"] = "confirmed"
-            update_data["paid_at"] = datetime.now().isoformat()
+            update_data["paid_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"Payment successful for order {order_id}")
             
         elif payment_status in ["FAILED", "EXPIRED"]:
@@ -748,42 +735,35 @@ def payment_webhook():
         
         try:
             # First, get the primary job to find all related copies
-            primary_job_result = supabase.table("print_jobs") \
-                .select("*") \
-                .eq("order_id", order_id) \
-                .execute()
-            
-            if not primary_job_result.data:
+            primary_jobs = db.get_jobs_by_order(order_id)
+
+            if not primary_jobs:
                 print(f"Order {order_id} not found in database")
                 # Try to find by job ID if order_id contains job ID
                 if "JOB_" in order_id:
                     job_id_part = order_id.split("_")[1]
-                    primary_job_result = supabase.table("print_jobs") \
-                        .select("*") \
-                        .eq("id", job_id_part) \
-                        .execute()
-                    
-                    if not primary_job_result.data:
+                    job = db.get_job(job_id_part)
+                    primary_jobs = [job] if job else []
+
+                    if not primary_jobs:
                         print(f"Job ID {job_id_part} also not found in database")
                         return jsonify({"error": "Order/Job not found"}), 404
-            
-            if primary_job_result.data:
-                primary_job = primary_job_result.data[0]
+
+            if primary_jobs:
+                primary_job = primary_jobs[0]
                 customer_id = primary_job.get("customer_id")
                 original_filename = primary_job.get("original_filename", "")
-                
+
                 # Find the base filename (without _copyX suffix)
                 base_filename = original_filename.split("_copy")[0]
-                
+
                 # Update ALL copies for this customer with the same base filename
-                update_result = supabase.table("print_jobs") \
-                    .update(update_data) \
-                    .eq("customer_id", customer_id) \
-                    .ilike("original_filename", f"{base_filename}%") \
-                    .execute()
-                
-                print(f"Updated {len(update_result.data if update_result.data else [])} copies for order {order_id}")
-                
+                updated = db.update_jobs_by_customer_and_prefix(
+                    customer_id, base_filename, update_data
+                )
+
+                print(f"Updated {updated} copies for order {order_id}")
+
             print(f"Successfully updated order {order_id} with status {payment_status_lower}")
             
         except Exception as e:
@@ -842,11 +822,11 @@ def check_payment_status(order_id):
     """Check the payment status of an order"""
     try:
         # Get order details from database
-        result = supabase.table("print_jobs").select("payment_status, status, order_id").eq("order_id", order_id).execute()
-        
-        if result.data:
-            payment_status = result.data[0].get("payment_status", "unknown")
-            job_status = result.data[0].get("status", "unknown")
+        rows = db.get_jobs_by_order(order_id)
+
+        if rows:
+            payment_status = rows[0].get("payment_status", "unknown")
+            job_status = rows[0].get("status", "unknown")
             
             return jsonify({
                 "order_id": order_id,

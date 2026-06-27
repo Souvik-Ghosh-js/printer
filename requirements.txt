@@ -2,7 +2,7 @@ flask
 pymupdf
 python-docx
 docx2pdf
-supabase
+PyMySQL
 PyPDF2
 uuid
 pillow
@@ -12,3 +12,4 @@ img2pdf
 requests
 setuptools
 opencv-python
+gunicorn

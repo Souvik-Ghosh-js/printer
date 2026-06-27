@@ -5,14 +5,8 @@ import tempfile
 import mimetypes
 import win32print
 import win32api
-from supabase import create_client, Client
 
-# --- Supabase Setup ---
-SUPABASE_URL = "https://clhtbadtgwckmbvtoynh.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsaHRiYWR0Z3dja21idnRveW5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxNzEwNjYsImV4cCI6MjA5NDc0NzA2Nn0.UCTlbFbtqW-VoFYFRxM0Yhe6RIzgDPIZdPA3sGiwHnE"
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-BUCKET_NAME = "pdfs"
+import db
 
 # --- Printer Config ---
 PRINTER_NAME = None  # None = system default printer
@@ -83,13 +77,13 @@ def print_file(file_path, job):
         return False
 
 def process_jobs():
-    jobs = supabase.table("print_jobs").select("*").eq("status", "confirmed").execute()
+    jobs = db.get_jobs_by_status("confirmed")
 
-    if not jobs.data:
+    if not jobs:
         print("No jobs to process.")
         return
 
-    for job in jobs.data:
+    for job in jobs:
         job_id = job["id"]
         file_url = job["file_url"]
         filename = job["original_filename"]
@@ -97,7 +91,7 @@ def process_jobs():
         print(f"📥 Found job {job_id}: {filename}")
 
         try:
-            # Download file
+            # Download file (served by the Flask app, token in the URL)
             resp = requests.get(file_url, stream=True)
             resp.raise_for_status()
 
@@ -110,10 +104,12 @@ def process_jobs():
 
             # Print
             if print_file(tmp_path, job):
-                supabase.table("print_jobs").update({"status": "printed"}).eq("id", job_id).execute()
+                db.update_job(job_id, {"status": "printed"})
 
-                file_key = os.path.basename(file_url.split("?")[0])
-                supabase.storage.from_(BUCKET_NAME).remove([file_key])
+                # Clean up the stored file once printed
+                storage_key = job.get("storage_key")
+                if storage_key:
+                    db.storage_remove(storage_key)
 
                 print(f"✅ Job {job_id} printed & cleaned up.")
             else:
