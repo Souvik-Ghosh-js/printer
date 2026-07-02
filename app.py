@@ -39,6 +39,32 @@ def serve_file(storage_key):
         return jsonify({"error": "not found"}), 404
     return send_file(path)
 
+
+# --- Worker API (used by the shop-PC print worker over HTTPS) ---
+@app.route("/worker/jobs")
+def worker_jobs():
+    """Return all jobs ready to print (status=confirmed). Token-guarded."""
+    if request.args.get("token") != db.FILE_TOKEN:
+        return jsonify({"error": "forbidden"}), 403
+    jobs = db.get_jobs_by_status("confirmed")
+    return jsonify({"jobs": jobs})
+
+
+@app.route("/worker/jobs/<job_id>/printed", methods=["POST"])
+def worker_mark_printed(job_id):
+    """Mark a job printed and delete its stored file. Token-guarded."""
+    if request.args.get("token") != db.FILE_TOKEN:
+        return jsonify({"error": "forbidden"}), 403
+    job = db.get_job(job_id)
+    if not job:
+        return jsonify({"error": "not found"}), 404
+    db.update_job(job_id, {"status": "printed"})
+    storage_key = job.get("storage_key")
+    if storage_key:
+        db.storage_remove(storage_key)
+    return jsonify({"status": "ok"})
+
+
 def analyze_image_bw_percentage(image_array, threshold_fraction=0.70):
     """
     Analyzes an image array and calculates the percentage of black and white pixels

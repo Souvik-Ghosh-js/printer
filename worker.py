@@ -6,7 +6,11 @@ import mimetypes
 import win32print
 import win32api
 
-import db
+# --- Server config ---
+# The public app the worker talks to. No DB access needed — everything
+# goes over HTTPS, guarded by FILE_TOKEN (must match db.py on the server).
+BASE_URL = "https://print.mohiniprintshop.org"
+FILE_TOKEN = "CHANGE_ME_random_token"   # must equal FILE_TOKEN in db.py on the server
 
 # --- Printer Config ---
 PRINTER_NAME = None  # None = system default printer
@@ -76,8 +80,26 @@ def print_file(file_path, job):
         print("Print error:", e)
         return False
 
+def fetch_confirmed_jobs():
+    """Ask the server for jobs ready to print."""
+    resp = requests.get(f"{BASE_URL}/worker/jobs", params={"token": FILE_TOKEN}, timeout=30)
+    resp.raise_for_status()
+    return resp.json().get("jobs", [])
+
+def mark_printed(job_id):
+    """Tell the server the job is printed (it updates DB + deletes the file)."""
+    resp = requests.post(
+        f"{BASE_URL}/worker/jobs/{job_id}/printed",
+        params={"token": FILE_TOKEN}, timeout=30,
+    )
+    resp.raise_for_status()
+
 def process_jobs():
-    jobs = db.get_jobs_by_status("confirmed")
+    try:
+        jobs = fetch_confirmed_jobs()
+    except Exception as e:
+        print(f"⚠️ Could not fetch jobs: {e}")
+        return
 
     if not jobs:
         print("No jobs to process.")
@@ -91,8 +113,8 @@ def process_jobs():
         print(f"📥 Found job {job_id}: {filename}")
 
         try:
-            # Download file (served by the Flask app, token in the URL)
-            resp = requests.get(file_url, stream=True)
+            # Download file (served by the app, token already in file_url)
+            resp = requests.get(file_url, stream=True, timeout=60)
             resp.raise_for_status()
 
             mime_type, _ = mimetypes.guess_type(filename)
@@ -104,13 +126,7 @@ def process_jobs():
 
             # Print
             if print_file(tmp_path, job):
-                db.update_job(job_id, {"status": "printed"})
-
-                # Clean up the stored file once printed
-                storage_key = job.get("storage_key")
-                if storage_key:
-                    db.storage_remove(storage_key)
-
+                mark_printed(job_id)
                 print(f"✅ Job {job_id} printed & cleaned up.")
             else:
                 print(f"❌ Job {job_id} failed to print.")
