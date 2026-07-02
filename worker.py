@@ -19,8 +19,18 @@ def get_printer_name():
     return PRINTER_NAME or win32print.GetDefaultPrinter()
 
 def configure_printer_settings(printer, job):
-    """Apply DB fields as printer DEVMODE settings."""
-    hprinter = win32print.OpenPrinter(printer)
+    """Apply DB fields as printer DEVMODE settings.
+
+    SetPrinter (level 2) modifies the printer's global defaults, which
+    requires write access — so we must open the printer with
+    PRINTER_ALL_ACCESS. NOTE: the worker process must run as Administrator,
+    otherwise even requesting ALL_ACCESS is denied.
+    """
+    # Request full access so SetPrinter is permitted.
+    hprinter = win32print.OpenPrinter(
+        printer,
+        {"DesiredAccess": win32print.PRINTER_ALL_ACCESS},
+    )
     properties = win32print.GetPrinter(hprinter, 2)
     devmode = properties["pDevMode"]
 
