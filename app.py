@@ -40,6 +40,21 @@ def serve_file(storage_key):
     return send_file(path)
 
 
+@app.route("/health")
+def health():
+    """Health check: confirms the app is up AND MySQL is reachable."""
+    status = {"app": "ok", "db": "ok"}
+    code = 200
+    try:
+        # Cheapest possible query that proves a real DB round-trip.
+        db.query("SELECT 1")
+    except Exception as e:
+        status["db"] = "error"
+        status["db_error"] = str(e)
+        code = 503
+    return jsonify(status), code
+
+
 # --- Worker API (used by the shop-PC print worker over HTTPS) ---
 @app.route("/worker/jobs")
 def worker_jobs():
