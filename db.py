@@ -25,7 +25,7 @@ DB_PASSWORD = "CHANGE_ME_strong_db_password"   # set this to match deploy script
 UPLOAD_DIR = "/var/lib/printer/uploads"
 
 # Public base URL of this app (used to build file download URLs for the worker)
-PUBLIC_BASE_URL = "https://print.yourdomain.com"
+PUBLIC_BASE_URL = "https://print.mohiniprintshop.org"
 
 # Shared secret guarding the /files download route
 FILE_TOKEN = "CHANGE_ME_random_token"

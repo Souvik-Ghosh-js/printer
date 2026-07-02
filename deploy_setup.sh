@@ -92,12 +92,12 @@ cat <<NOTE
    - DB_PASSWORD in THIS script  ==  DB_PASSWORD in db.py
 
  MANUAL STEPS LEFT (one time):
- 1. nginx: add a server block for your domain proxying to
-    http://127.0.0.1:${PORT}, then run certbot for HTTPS.
+ 1. nginx: add a server block for print.mohiniprintshop.org proxying
+    to http://127.0.0.1:${PORT}, then run certbot for HTTPS.
     Your existing app keeps its own block/port — they coexist.
- 2. Set PUBLIC_BASE_URL + FILE_TOKEN in db.py to your real domain
-    + a random token (then re-run this script to redeploy).
- 3. Cashfree dashboard: webhook URL -> https://YOUR_DOMAIN/payment-callback
+ 2. Set FILE_TOKEN in db.py to a random token (then redeploy).
+ 3. Cashfree dashboard: webhook URL ->
+    https://print.mohiniprintshop.org/payment-callback
  4. Shop PC worker.py: needs MySQL reachable. Either open port 3306
     in Lightsail firewall to the shop's IP (+ a host-scoped DB user),
     or have the worker talk to the app over HTTP instead.
