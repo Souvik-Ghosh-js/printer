@@ -17,21 +17,7 @@ set -euo pipefail
 DOMAIN="print.mohiniprintshop.org"
 PORT="5001"
 SERVICE="printer-app.service"
-CERTBOT_EMAIL="chris.idell@magichealth.io"   # used for cert expiry notices
-
-echo "==> Pre-flight: does DNS point here?"
-RESOLVED="$(dig +short "$DOMAIN" | tail -n1 || true)"
-MYIP="$(curl -s ifconfig.me || true)"
-echo "    $DOMAIN -> ${RESOLVED:-<nothing>}   (this instance: ${MYIP:-unknown})"
-if [ -z "$RESOLVED" ]; then
-  echo "!!! $DOMAIN does not resolve yet. Create the A record and wait, then re-run."
-  echo "!!! Aborting before certbot (it would fail without valid DNS)."
-  exit 1
-fi
-if [ -n "$MYIP" ] && [ "$RESOLVED" != "$MYIP" ]; then
-  echo "!!! WARNING: DNS points to $RESOLVED but this instance is $MYIP."
-  echo "!!! Continuing anyway in 5s (Ctrl-C to abort)..."; sleep 5
-fi
+CERTBOT_EMAIL="souvikghoshk@gmail.com"   # used for cert expiry notices
 
 echo "==> [4] nginx site for $DOMAIN -> 127.0.0.1:$PORT"
 sudo tee /etc/nginx/sites-available/printer >/dev/null <<NGINX
