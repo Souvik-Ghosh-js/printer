@@ -244,24 +244,22 @@ def delete_job(job_id):
         return jsonify({"error": "Deletion failed", "detail": str(e)}), 500
 
     
-def calculate_price_v2(total_pages, high_black_pages, normal_pages):
+def calculate_price_v2(total_pages, high_black_pages, normal_pages, color_mode="bw"):
     """
-    CORRECTED PRICING LOGIC:
-    - Base price for ALL pages: 4 or fewer pages - ₹3 per page, More than 4 pages - ₹2 per page
-    - Additional ₹2 per high black page
+    PRICING LOGIC (depends on color_mode):
+    - B&W:    flat ₹3 per page
+    - Colour: ₹10 per page for jobs of 10 pages or fewer,
+              ₹7 per page (whole job) for jobs of more than 10 pages
     """
     if total_pages <= 0:
         return "0.00"
-    
-    # Base price for ALL pages
-    base_rate = 3 if total_pages <= 4 else 2
-    base_price = total_pages * base_rate  # Apply to ALL pages
-    
-    # Additional charge for high black pages ONLY
-    high_black_charge = high_black_pages * 2
-    
-    total_price = base_price + high_black_charge
-    
+
+    if color_mode == "color":
+        rate = 10 if total_pages <= 10 else 7
+    else:
+        rate = 3  # B&W flat rate
+
+    total_price = total_pages * rate
     return f"{total_price:.2f}"
     
 def get_page_range_from_string(page_range_str, max_page):
@@ -349,12 +347,12 @@ def preview_pdf():
         return jsonify({"error": "Missing file"}), 400
 
     orientation = request.form.get("orientation", "portrait")
-    color_mode = request.form.get("color_mode", "color")
+    color_mode = request.form.get("color_mode", "bw")
     page_range_str = request.form.get("pages", "").strip()
 
     try:
         file_bytes = file.read()
-        
+
         # Process PDF with all options
         processed_pdf_bytes, total_pages, selected_indices = process_pdf_with_options(
             file_bytes, orientation, color_mode, page_range_str
@@ -362,12 +360,13 @@ def preview_pdf():
 
         # Analyze PDF content for pricing
         analysis_result = analyze_pdf_page_content(file_bytes, selected_indices)
-        
+
         # Calculate price with new logic
         price = calculate_price_v2(
             analysis_result['total_pages'],
             analysis_result['high_black_pages'],
-            analysis_result['normal_pages']
+            analysis_result['normal_pages'],
+            color_mode
         )
 
         response = send_file(
@@ -428,8 +427,8 @@ def upload_pdf():
     # Get processing options from request
     page_range_str = request.form.get("pages", "").strip()
     orientation = request.form.get("orientation", "portrait")
-    color_mode = request.form.get("color_mode", "color")
-    
+    color_mode = request.form.get("color_mode", "bw")
+
     print(f"⚙️  Settings - Orientation: {orientation}, Color: {color_mode}, Page range: '{page_range_str}'")
 
     try:
@@ -465,7 +464,8 @@ def upload_pdf():
         price = calculate_price_v2(
             analysis_result['total_pages'],
             analysis_result['high_black_pages'],
-            analysis_result['normal_pages']
+            analysis_result['normal_pages'],
+            color_mode
         )
         print(f"💰 Calculated price: ₹{price}")
         
