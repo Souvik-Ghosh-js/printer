@@ -64,6 +64,6 @@ cat <<NOTE
      firewall (only 80 + 443 are needed now).
    - Cashfree webhook -> https://${DOMAIN}/payment-callback
    - Make sure FILE_TOKEN in db.py is a real random value, then
-     redeploy: bash /opt/printer/deploy_setup.sh
+     redeploy: bash /home/ubuntu/printer/redeploy.sh
 ============================================================
 NOTE

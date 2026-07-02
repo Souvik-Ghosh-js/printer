@@ -4,11 +4,11 @@
 #  Pulls latest code, installs deps, restarts the service.
 #  Does NOT touch the DB/schema. Safe to run repeatedly.
 #
-#  Manual use:  bash /opt/printer/redeploy.sh
+#  Manual use:  bash /home/ubuntu/printer/redeploy.sh
 # ============================================================
 set -euo pipefail
 
-APP_DIR="/opt/printer"
+APP_DIR="/home/ubuntu/printer"
 BRANCH="main"
 SERVICE="printer-app.service"
 

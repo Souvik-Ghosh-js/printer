@@ -18,7 +18,7 @@ set -euo pipefail
 # ---------------- CONFIG (edit if needed) ----------------
 REPO_URL="https://github.com/Souvik-Ghosh-js/printer.git"
 BRANCH="main"
-APP_DIR="/opt/printer"                        # where the code is cloned on the instance
+APP_DIR="/home/ubuntu/printer"                # where the code is cloned on the instance
 UPLOAD_DIR="/var/lib/printer/uploads"         # PDF storage on the SSD
 PORT="5001"                                   # second app -> different port from your existing app
 
