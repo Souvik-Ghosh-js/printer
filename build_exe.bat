@@ -1,26 +1,40 @@
 @echo off
 REM ============================================================
 REM  Build MohiniPrintWorker.exe from worker_app.py
-REM  Run this on the shop PC (Windows) inside the printer folder.
+REM  Run this on a Windows PC inside the printer folder.
 REM ============================================================
+setlocal
 
 echo Installing build dependencies...
-pip install pyinstaller requests pywin32
+python -m pip install pyinstaller requests pywin32
+if errorlevel 1 goto :fail
 
+echo.
 echo Building the .exe...
-REM --onefile   : single .exe
-REM --windowed  : no console window (GUI app)
-REM --name      : output name
-pyinstaller --onefile --windowed --name "MohiniPrintWorker" ^
+REM Call PyInstaller as a module so it works even when the
+REM 'pyinstaller' command isn't on PATH (common with Store Python).
+python -m PyInstaller --onefile --windowed --name "MohiniPrintWorker" ^
     --hidden-import win32print --hidden-import win32api ^
     worker_app.py
+if errorlevel 1 goto :fail
 
 echo.
 echo ============================================================
-echo  Done. Your app is here:
-echo     dist\MohiniPrintWorker.exe
+echo  SUCCESS. Your app is here:
+echo     %CD%\dist\MohiniPrintWorker.exe
 echo.
 echo  Double-click it to run. It opens a window and starts
 echo  watching for print jobs automatically.
 echo ============================================================
 pause
+exit /b 0
+
+:fail
+echo.
+echo ############################################################
+echo  BUILD FAILED. See the error above.
+echo  Common fix: run this instead, directly in the terminal:
+echo     python -m PyInstaller --onefile --windowed --name "MohiniPrintWorker" worker_app.py
+echo ############################################################
+pause
+exit /b 1
