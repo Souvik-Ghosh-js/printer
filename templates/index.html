@@ -689,11 +689,23 @@
         triggerAutoPreview();
       });
 
+      // Grayscale the preview when B/W is selected (visual only — the stored
+      // file stays color; the printer forces mono at print time).
+      function applyColorFilter() {
+        previewBox.style.filter =
+          (colorModeSelect.value === "color") ? "none" : "grayscale(1)";
+      }
+
       // Add event listeners for auto-preview
       orientationSelect.addEventListener("change", triggerAutoPreview);
-      colorModeSelect.addEventListener("change", triggerAutoPreview);
+      colorModeSelect.addEventListener("change", () => {
+        applyColorFilter();      // instant visual switch
+        triggerAutoPreview();    // also re-price
+      });
       pagesInput.addEventListener("input", triggerAutoPreview);
       copiesInput.addEventListener("change", triggerAutoPreview);
+
+      applyColorFilter();  // set initial state (defaults to B/W)
 
       // Auto-preview function with debouncing
       function triggerAutoPreview() {

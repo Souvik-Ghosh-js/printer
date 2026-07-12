@@ -32,9 +32,30 @@ PRINTER_NAME = None  # None = system default printer
 
 
 # ---------------------------------------------------------------------------
-# Printing logic (unchanged from worker.py)
+# Printing logic
 # ---------------------------------------------------------------------------
+# The printer the user picks in the UI. Shared with the worker thread.
+# None = fall back to the system default printer.
+_selected_printer = None
+_printer_lock = threading.Lock()
+
+
+def set_selected_printer(name):
+    global _selected_printer
+    with _printer_lock:
+        _selected_printer = name
+
+
+def list_printers():
+    """All installed printers on this PC (local + network connections)."""
+    flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+    return [p[2] for p in win32print.EnumPrinters(flags, None, 1)]
+
+
 def get_printer_name():
+    with _printer_lock:
+        if _selected_printer:
+            return _selected_printer
     return PRINTER_NAME or win32print.GetDefaultPrinter()
 
 
@@ -165,6 +186,7 @@ class App(tk.Tk):
         self.worker = None
 
         self._build_ui()
+        self._refresh_printers()  # populate dropdown + pick default (after log box exists)
         self.after(200, self._drain_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -177,15 +199,19 @@ class App(tk.Tk):
         ttk.Label(top, text="Mohini Print Worker", font=("Segoe UI", 14, "bold")).pack(side="left")
         self.status_lbl = ttk.Label(top, text="●  starting", foreground="orange")
         self.status_lbl.pack(side="left", padx=15)
-        self.printer_lbl = ttk.Label(top, text="")
-        self.printer_lbl.pack(side="left", padx=15)
         self.start_btn = ttk.Button(top, text="Stop", command=self.toggle)
         self.start_btn.pack(side="right")
 
-        try:
-            self.printer_lbl.config(text=f"Printer: {get_printer_name()}")
-        except Exception:
-            self.printer_lbl.config(text="Printer: (none set)")
+        # Printer selector row
+        prow = ttk.Frame(self, padding=(10, 0, 10, 8))
+        prow.pack(fill="x")
+        ttk.Label(prow, text="Printer:").pack(side="left")
+        self.printer_var = tk.StringVar()
+        self.printer_combo = ttk.Combobox(prow, textvariable=self.printer_var,
+                                          state="readonly", width=45)
+        self.printer_combo.pack(side="left", padx=8)
+        self.printer_combo.bind("<<ComboboxSelected>>", self._on_printer_change)
+        ttk.Button(prow, text="Refresh", command=self._refresh_printers).pack(side="left")
 
         # Records table
         cols = ("id", "file", "color", "copies", "status", "time")
@@ -201,6 +227,35 @@ class App(tk.Tk):
         self.log_box = scrolledtext.ScrolledText(self, height=8, state="disabled",
                                                  font=("Consolas", 9))
         self.log_box.pack(fill="both", expand=False, padx=10, pady=(0, 10))
+
+    # --- printer selection ---
+    def _refresh_printers(self):
+        try:
+            printers = list_printers()
+        except Exception as e:
+            printers = []
+            self._append_log(f"⚠️ Could not list printers: {e}")
+
+        self.printer_combo["values"] = printers
+
+        # Keep the current pick if still available, else use system default.
+        current = self.printer_var.get()
+        if current and current in printers:
+            chosen = current
+        else:
+            try:
+                chosen = win32print.GetDefaultPrinter()
+            except Exception:
+                chosen = printers[0] if printers else ""
+        self.printer_var.set(chosen)
+        set_selected_printer(chosen or None)
+        if chosen:
+            self._append_log(f"🖨 Using printer: {chosen}")
+
+    def _on_printer_change(self, _event=None):
+        chosen = self.printer_var.get()
+        set_selected_printer(chosen or None)
+        self._append_log(f"🖨 Printer switched to: {chosen}")
 
     # --- start/stop ---
     def start(self):
