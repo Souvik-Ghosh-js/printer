@@ -14,7 +14,7 @@ echo Building the .exe...
 REM Call PyInstaller as a module so it works even when the
 REM 'pyinstaller' command isn't on PATH (common with Store Python).
 python -m PyInstaller --onefile --windowed --name "MohiniPrintWorker" ^
-    --hidden-import win32print --hidden-import win32api ^
+    --hidden-import win32print --hidden-import win32api --hidden-import win32timezone ^
     worker_app.py
 if errorlevel 1 goto :fail
 

@@ -13,6 +13,7 @@ import threading
 import queue
 import tempfile
 import mimetypes
+import subprocess
 
 import requests
 import tkinter as tk
@@ -29,6 +30,9 @@ FILE_TOKEN = "CHANGE_ME_random_token"   # must match FILE_TOKEN in db.py on the 
 
 POLL_SECONDS = 10
 PRINTER_NAME = None  # None = system default printer
+
+# How long (seconds) to wait for a spooled job to actually finish printing
+PRINT_CONFIRM_TIMEOUT = 120
 
 
 # ---------------------------------------------------------------------------
@@ -79,11 +83,140 @@ def configure_printer_settings(printer, job):
     win32print.ClosePrinter(hprinter)
 
 
-def print_file(file_path, job):
-    printer = get_printer_name()
-    configure_printer_settings(printer, job)
+def printer_is_ready(printer):
+    """Return (ok, reason). ok=False if the printer is offline/error/paused."""
+    bad = {
+        win32print.PRINTER_STATUS_OFFLINE: "offline",
+        win32print.PRINTER_STATUS_ERROR: "error",
+        win32print.PRINTER_STATUS_PAPER_JAM: "paper jam",
+        win32print.PRINTER_STATUS_PAPER_OUT: "out of paper",
+        win32print.PRINTER_STATUS_PAUSED: "paused",
+        win32print.PRINTER_STATUS_NOT_AVAILABLE: "not available",
+        win32print.PRINTER_STATUS_NO_TONER: "no toner",
+        win32print.PRINTER_STATUS_DOOR_OPEN: "door open",
+    }
+    try:
+        h = win32print.OpenPrinter(printer)
+        try:
+            info = win32print.GetPrinter(h, 2)
+        finally:
+            win32print.ClosePrinter(h)
+    except Exception as e:
+        return False, f"cannot open printer ({e})"
+
+    status = info.get("Status", 0)
+    for bit, reason in bad.items():
+        if status & bit:
+            return False, reason
+    return True, "ready"
+
+
+def _get_job_ids(printer):
+    """Current spooler job IDs for a printer."""
+    h = win32print.OpenPrinter(printer)
+    try:
+        jobs = win32print.EnumJobs(h, 0, 999, 1)
+        return {j["JobId"] for j in jobs}, {j["JobId"]: j for j in jobs}
+    finally:
+        win32print.ClosePrinter(h)
+
+
+def _find_acrobat():
+    """Locate Adobe Acrobat/Reader, which can print to a NAMED printer via /t.
+    Returns the exe path, or None if not installed."""
+    candidates = [
+        r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+        r"C:\Program Files (x86)\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+        r"C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
+        r"C:\Program Files\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
+        r"C:\Program Files (x86)\Adobe\Reader 11.0\Reader\AcroRd32.exe",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _submit_print(file_path, printer):
+    """Submit the PDF to the EXACT named printer.
+
+    Prefers Adobe Acrobat/Reader (/t prints to a named printer and quits, so
+    the printer choice is honored). Falls back to ShellExecute if Acrobat isn't
+    installed — that path prints to the default viewer's printer and cannot
+    guarantee switching. Returns the method used ('acrobat' or 'shell').
+    """
+    acro = _find_acrobat()
+    if acro:
+        # AcroRd32.exe /t "file" "printer"  -> print to named printer, then exit
+        subprocess.Popen([acro, "/t", file_path, printer],
+                         creationflags=subprocess.CREATE_NO_WINDOW)
+        return "acrobat"
     win32api.ShellExecute(0, "print", file_path, f'/d:"{printer}"', ".", 0)
-    return True
+    return "shell"
+
+
+def print_file(file_path, job):
+    """Print with confirmation. Returns (status, message).
+
+    status is 'printed' only if the spooler reports the job completed;
+    otherwise 'failed' with a reason (offline, timed out, error, etc.).
+    """
+    printer = get_printer_name()
+
+    # 1) Pre-check: is the printer actually ready?
+    ok, reason = printer_is_ready(printer)
+    if not ok:
+        return "failed", f"printer not ready: {reason}"
+
+    # 2) Apply per-job settings (color/duplex/etc.)
+    try:
+        configure_printer_settings(printer, job)
+    except Exception as e:
+        return "failed", f"could not apply settings: {e}"
+
+    # 3) Snapshot existing jobs, submit ONCE to the exact printer, then
+    #    find the new job the spooler created for this printer.
+    before, _ = _get_job_ids(printer)
+    try:
+        method = _submit_print(file_path, printer)
+    except Exception as e:
+        return "failed", f"submit error: {e}"
+
+    # Give the PDF app + spooler time to register the new job.
+    new_id = None
+    for _ in range(60):  # up to ~30s
+        time.sleep(0.5)
+        after, jobmap = _get_job_ids(printer)
+        added = after - before
+        if added:
+            new_id = max(added)
+            break
+
+    if new_id is None:
+        # Job never reached the queue — nothing was printed.
+        return "failed", "job did not reach the print queue (no PDF handler?)"
+
+    # 4) Track the job until it leaves the queue (completed) or errors out.
+    deadline = time.time() + PRINT_CONFIRM_TIMEOUT
+    error_bits = {
+        win32print.JOB_STATUS_ERROR: "job error",
+        win32print.JOB_STATUS_OFFLINE: "printer offline",
+        win32print.JOB_STATUS_PAPEROUT: "out of paper",
+        win32print.JOB_STATUS_BLOCKED_DEVQ: "queue blocked",
+        win32print.JOB_STATUS_DELETED: "job deleted",
+    }
+    while time.time() < deadline:
+        ids, jobmap = _get_job_ids(printer)
+        if new_id not in ids:
+            # Job left the queue = printed/spooled successfully.
+            return "printed", "completed"
+        jstatus = jobmap[new_id].get("Status", 0)
+        for bit, reason in error_bits.items():
+            if jstatus & bit:
+                return "failed", reason
+        time.sleep(1)
+
+    return "failed", "timed out waiting for the printer"
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +244,10 @@ class WorkerThread(threading.Thread):
         super().__init__(daemon=True)
         self.ui_queue = ui_queue
         self.stop_event = stop_event
+        # Job ids already submitted this session — guards against submitting the
+        # SAME job to the printer twice (root cause of duplicate spooler jobs).
+        # We only retry a job if the printer itself reported a failure.
+        self.submitted = set()
 
     def log(self, msg):
         self.ui_queue.put(("log", msg))
@@ -136,6 +273,11 @@ class WorkerThread(threading.Thread):
             for job in jobs:
                 if self.stop_event.is_set():
                     break
+                # Skip any job we already submitted this session. It's either
+                # printed (server will drop it soon) or awaiting confirmation —
+                # resubmitting would create a duplicate spooler job.
+                if job["id"] in self.submitted:
+                    continue
                 self._handle_job(job)
 
             self._sleep()
@@ -146,23 +288,74 @@ class WorkerThread(threading.Thread):
         filename = job.get("original_filename", "?")
         self.log(f"📥 Job {job_id}: {filename}")
         self.record(job, "printing")
+        # Mark as attempted immediately so a slow print can't be double-submitted
+        # by the next poll while this one is still in flight.
+        self.submitted.add(job_id)
+
+        # --- Download the file ---
         try:
             resp = requests.get(job["file_url"], stream=True, timeout=60)
             resp.raise_for_status()
-
-            mime_type, _ = mimetypes.guess_type(filename)
-            ext = ".pdf" if "pdf" in (mime_type or "") else os.path.splitext(filename)[1] or ".pdf"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                tmp.write(resp.content)
-                tmp_path = tmp.name
-
-            print_file(tmp_path, job)
-            mark_printed(job_id)
-            self.log(f"✅ Job {job_id} printed.")
-            self.record(job, "printed")
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else None
+            if code == 404:
+                # File is gone on the server — it will NEVER succeed, so mark it
+                # done to stop retrying it forever (prevents the infinite loop).
+                self.log(f"⚠️ Job {job_id}: file missing (404) — skipping.")
+                try:
+                    mark_printed(job_id)
+                except Exception:
+                    pass
+                self.record(job, "skipped (missing file)")
+            else:
+                self.submitted.discard(job_id)  # transient — allow retry
+                self.log(f"❌ Job {job_id}: download failed ({code}).")
+                self.record(job, "failed")
+            return
         except Exception as e:
-            self.log(f"❌ Job {job_id} failed: {e}")
+            self.submitted.discard(job_id)  # network error — allow retry
+            self.log(f"❌ Job {job_id}: download error: {e}")
             self.record(job, "failed")
+            return
+
+        # --- Save to temp ---
+        mime_type, _ = mimetypes.guess_type(filename)
+        ext = ".pdf" if "pdf" in (mime_type or "") else os.path.splitext(filename)[1] or ".pdf"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp.write(resp.content)
+            tmp_path = tmp.name
+
+        # --- Print WITH confirmation ---
+        try:
+            status, message = print_file(tmp_path, job)
+        except Exception as e:
+            self.submitted.discard(job_id)  # allow retry
+            self.log(f"❌ Job {job_id}: print error: {e}")
+            self.record(job, "failed")
+            return
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+        if status == "printed":
+            # Success: keep it in `submitted` so we never resend it. Tell the
+            # server it's done (updates DB + deletes the file).
+            try:
+                mark_printed(job_id)
+                self.log(f"✅ Job {job_id} printed ({message}).")
+                self.record(job, "printed")
+            except Exception as e:
+                self.log(f"⚠️ Job {job_id} printed but could not update server: {e}")
+                self.record(job, "printed (unsynced)")
+        else:
+            # Printer REPORTED a failure (offline/paper/etc.). Allow a retry by
+            # forgetting it — but only after a cooldown so we don't hammer the
+            # printer. It stays 'confirmed' on the server until it truly prints.
+            self.submitted.discard(job_id)
+            self.log(f"❌ Job {job_id} NOT printed: {message}. Will retry later.")
+            self.record(job, f"failed: {message}")
 
     def _sleep(self):
         # sleep in small chunks so Stop is responsive
@@ -190,16 +383,18 @@ class App(tk.Tk):
         self.after(200, self._drain_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.start()  # auto-start on launch
+        # Do NOT auto-start. Wait for the user to click Start.
+        self.status_lbl.config(text="●  stopped (click Start)", foreground="red")
+        self._append_log("Ready. Click Start to begin printing.")
 
     def _build_ui(self):
         # Top bar
         top = ttk.Frame(self, padding=10)
         top.pack(fill="x")
         ttk.Label(top, text="Mohini Print Worker", font=("Segoe UI", 14, "bold")).pack(side="left")
-        self.status_lbl = ttk.Label(top, text="●  starting", foreground="orange")
+        self.status_lbl = ttk.Label(top, text="●  stopped", foreground="red")
         self.status_lbl.pack(side="left", padx=15)
-        self.start_btn = ttk.Button(top, text="Stop", command=self.toggle)
+        self.start_btn = ttk.Button(top, text="Start", command=self.toggle)
         self.start_btn.pack(side="right")
 
         # Printer selector row
