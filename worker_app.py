@@ -21,6 +21,7 @@ from tkinter import ttk, scrolledtext
 
 import win32print
 import win32api
+import win32con
 
 # ---------------------------------------------------------------------------
 # Config  (edit these two before building the .exe)
@@ -38,10 +39,13 @@ PRINT_CONFIRM_TIMEOUT = 120
 # ---------------------------------------------------------------------------
 # Printing logic
 # ---------------------------------------------------------------------------
-# The printer the user picks in the UI. Shared with the worker thread.
-# None = fall back to the system default printer.
+# The printer + tray the user picks in the UI. Shared with the worker thread.
+# None = fall back to the system default printer / printer's default tray.
 _selected_printer = None
+_selected_tray = None          # a DMBIN_* integer, or None for "auto"
 _printer_lock = threading.Lock()
+
+AUTO_TRAY_LABEL = "Auto (printer default)"
 
 
 def set_selected_printer(name):
@@ -50,10 +54,38 @@ def set_selected_printer(name):
         _selected_printer = name
 
 
+def set_selected_tray(bin_id):
+    global _selected_tray
+    with _printer_lock:
+        _selected_tray = bin_id
+
+
 def list_printers():
     """All installed printers on this PC (local + network connections)."""
     flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
     return [p[2] for p in win32print.EnumPrinters(flags, None, 1)]
+
+
+def list_trays(printer):
+    """Return the printer's paper trays as [(label, bin_id), ...].
+
+    Queries the driver for its bin names + IDs. Returns [] if the driver
+    reports none (the UI hides the tray dropdown in that case).
+    """
+    try:
+        names = win32print.DeviceCapabilities(
+            printer, "", win32con.DC_BINNAMES) or []
+        ids = win32print.DeviceCapabilities(
+            printer, "", win32con.DC_BINS) or []
+    except Exception:
+        return []
+    # Pair names with ids; some drivers return mismatched lengths.
+    trays = []
+    for i, name in enumerate(names):
+        bin_id = ids[i] if i < len(ids) else None
+        if bin_id is not None:
+            trays.append((str(name).strip(), int(bin_id)))
+    return trays
 
 
 def get_printer_name():
@@ -77,6 +109,12 @@ def configure_printer_settings(printer, job):
     paper_map = {"A4": 9, "A3": 8, "Letter": 1}
     if job.get("paper_size") in paper_map:
         devmode.PaperSize = paper_map[job["paper_size"]]
+
+    # Paper tray (DefaultSource) — only if the user picked a specific one.
+    with _printer_lock:
+        tray = _selected_tray
+    if tray is not None:
+        devmode.DefaultSource = tray
 
     properties["pDevMode"] = devmode
     win32print.SetPrinter(hprinter, 2, properties, 0)
@@ -408,6 +446,14 @@ class App(tk.Tk):
         self.printer_combo.bind("<<ComboboxSelected>>", self._on_printer_change)
         ttk.Button(prow, text="Refresh", command=self._refresh_printers).pack(side="left")
 
+        # Tray selector (hidden when the printer reports no trays)
+        self.tray_label = ttk.Label(prow, text="Tray:")
+        self.tray_var = tk.StringVar()
+        self.tray_combo = ttk.Combobox(prow, textvariable=self.tray_var,
+                                       state="readonly", width=25)
+        self.tray_combo.bind("<<ComboboxSelected>>", self._on_tray_change)
+        self._trays = []  # list of (label, bin_id) for the current printer
+
         # Records table
         cols = ("id", "file", "color", "copies", "status", "time")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=12)
@@ -446,11 +492,45 @@ class App(tk.Tk):
         set_selected_printer(chosen or None)
         if chosen:
             self._append_log(f"🖨 Using printer: {chosen}")
+        self._refresh_trays(chosen)
 
     def _on_printer_change(self, _event=None):
         chosen = self.printer_var.get()
         set_selected_printer(chosen or None)
         self._append_log(f"🖨 Printer switched to: {chosen}")
+        self._refresh_trays(chosen)
+
+    # --- tray selection ---
+    def _refresh_trays(self, printer):
+        """Populate the tray dropdown for a printer, or hide it if none."""
+        self._trays = list_trays(printer) if printer else []
+
+        if not self._trays:
+            # No trays reported — hide the dropdown and use printer default.
+            self.tray_label.pack_forget()
+            self.tray_combo.pack_forget()
+            set_selected_tray(None)
+            return
+
+        # Show it, with an Auto option first.
+        labels = [AUTO_TRAY_LABEL] + [t[0] for t in self._trays]
+        self.tray_combo["values"] = labels
+        self.tray_var.set(AUTO_TRAY_LABEL)
+        set_selected_tray(None)  # default to Auto
+        self.tray_label.pack(side="left", padx=(12, 0))
+        self.tray_combo.pack(side="left", padx=8)
+
+    def _on_tray_change(self, _event=None):
+        label = self.tray_var.get()
+        if label == AUTO_TRAY_LABEL:
+            set_selected_tray(None)
+            self._append_log("📥 Tray: auto (printer default)")
+            return
+        for name, bin_id in self._trays:
+            if name == label:
+                set_selected_tray(bin_id)
+                self._append_log(f"📥 Tray switched to: {name}")
+                return
 
     # --- start/stop ---
     def start(self):

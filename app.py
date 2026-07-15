@@ -313,17 +313,22 @@ def process_pdf_with_options(file_bytes, orientation, color_mode, page_range_str
     else:
         # Complex case - use PyMuPDF but avoid rasterization
         new_doc = fitz.open()
-        
+
         for page_num in selected_indices:
             page = doc.load_page(page_num)
-            new_page = new_doc.new_page(width=page.rect.width, height=page.rect.height)
-            
-            # Copy the page content directly
-            new_page.show_pdf_page(new_page.rect, doc, page_num)
-            
+            w, h = page.rect.width, page.rect.height
+
             if orientation == "landscape":
-                new_page.set_rotation(90)
-        
+                # Create a LANDSCAPE page (swapped dimensions) and place the
+                # original content rotated 90°, so the resulting PDF page is
+                # genuinely landscape — prints sideways on the paper regardless
+                # of the print app. (set_rotation alone doesn't change size.)
+                new_page = new_doc.new_page(width=h, height=w)
+                new_page.show_pdf_page(new_page.rect, doc, page_num, rotate=90)
+            else:
+                new_page = new_doc.new_page(width=w, height=h)
+                new_page.show_pdf_page(new_page.rect, doc, page_num)
+
         pdf_bytes = new_doc.tobytes()
         new_doc.close()
         total_pages_processed = len(selected_indices)
