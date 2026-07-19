@@ -424,10 +424,11 @@ def _apply_crop(img, crop):
 
 def compose_id_card_pdf(front_bytes, front_name, front_crop,
                         back_bytes, back_name, back_crop, layout="side_by_side"):
-    """Place two (cropped) ID-card sides on one A4 portrait page.
+    """Place two (cropped) ID-card sides on one A4 portrait page at their
+    REAL physical size (standard ID card = 85.6mm x 54mm), not stretched
+    to fill the page.
 
     layout = 'side_by_side' (left/right) or 'top_bottom' (stacked).
-    Cards are scaled as large as fit in their cell while keeping aspect ratio.
     Returns PDF bytes.
     """
     from PIL import Image
@@ -435,49 +436,49 @@ def compose_id_card_pdf(front_bytes, front_name, front_crop,
     front = _apply_crop(_load_as_image(front_bytes, front_name), front_crop)
     back = _apply_crop(_load_as_image(back_bytes, back_name), back_crop)
 
-    # A4 portrait at 200 DPI
-    DPI = 200
-    A4_W = int(8.27 * DPI)   # ~1654 px
-    A4_H = int(11.69 * DPI)  # ~2339 px
+    # A4 portrait at 300 DPI (higher DPI = crisper small cards)
+    DPI = 300
+    A4_W = int(8.27 * DPI)
+    A4_H = int(11.69 * DPI)
     MARGIN = int(0.4 * DPI)
     GAP = int(0.3 * DPI)
 
+    # Real ID-card size (ISO/IEC 7810 ID-1 / CR80): 85.6mm x 54mm.
+    MM = DPI / 25.4
+    CARD_W = int(85.6 * MM)   # ~1011 px
+    CARD_H = int(54.0 * MM)   # ~638 px
+
     canvas = Image.new("RGB", (A4_W, A4_H), "white")
 
-    if layout == "top_bottom":
-        # Two full-width cells stacked vertically.
-        cell_w = A4_W - 2 * MARGIN
-        cell_h = (A4_H - 2 * MARGIN - GAP) // 2
+    def fit_to_card(card):
+        """Scale the cropped image to the physical card box, preserving aspect
+        (so it fits WITHIN the real card size — never enlarged past it)."""
+        scale = min(CARD_W / card.width, CARD_H / card.height)
+        # Don't upscale beyond the real card size; only shrink if larger.
+        scale = min(scale, 1.0) if card.width <= CARD_W and card.height <= CARD_H else scale
+        w = max(1, int(card.width * scale))
+        h = max(1, int(card.height * scale))
+        return card.resize((w, h), Image.LANCZOS)
+
+    f_img = fit_to_card(front)
+    b_img = fit_to_card(back)
+
+    if layout == "side_by_side":
+        # Two cards centered horizontally as a pair, vertically centered.
+        total_w = f_img.width + GAP + b_img.width
+        start_x = (A4_W - total_w) // 2
+        y_f = (A4_H - f_img.height) // 2
+        y_b = (A4_H - b_img.height) // 2
+        canvas.paste(f_img, (start_x, y_f))
+        canvas.paste(b_img, (start_x + f_img.width + GAP, y_b))
     else:
-        # Two cells side by side.
-        cell_w = (A4_W - 2 * MARGIN - GAP) // 2
-        cell_h = A4_H - 2 * MARGIN
-
-    def fit(card):
-        scale = min(cell_w / card.width, cell_h / card.height)
-        return card.resize(
-            (max(1, int(card.width * scale)), max(1, int(card.height * scale))),
-            Image.LANCZOS,
-        )
-
-    f_img = fit(front)
-    b_img = fit(back)
-
-    if layout == "top_bottom":
-        # Front on top, back below; each centered horizontally in its cell.
-        x_f = MARGIN + (cell_w - f_img.width) // 2
-        x_b = MARGIN + (cell_w - b_img.width) // 2
-        y_f = MARGIN + (cell_h - f_img.height) // 2
-        y_b = MARGIN + cell_h + GAP + (cell_h - b_img.height) // 2
-    else:
-        # Front on left, back on right; each centered vertically in its cell.
-        y_f = MARGIN + (cell_h - f_img.height) // 2
-        y_b = MARGIN + (cell_h - b_img.height) // 2
-        x_f = MARGIN + (cell_w - f_img.width) // 2
-        x_b = MARGIN + cell_w + GAP + (cell_w - b_img.width) // 2
-
-    canvas.paste(f_img, (x_f, y_f))
-    canvas.paste(b_img, (x_b, y_b))
+        # Stacked: front on top, back below, both centered horizontally.
+        total_h = f_img.height + GAP + b_img.height
+        start_y = (A4_H - total_h) // 2
+        x_f = (A4_W - f_img.width) // 2
+        x_b = (A4_W - b_img.width) // 2
+        canvas.paste(f_img, (x_f, start_y))
+        canvas.paste(b_img, (x_b, start_y + f_img.height + GAP))
 
     out = io.BytesIO()
     canvas.save(out, format="PDF", resolution=DPI)
