@@ -389,17 +389,140 @@ def preview_pdf():
     except Exception as e:
         return jsonify({"error": "Preview generation failed", "detail": str(e)}), 500
 
+# --- ID card compose + upload helpers ---
+def _load_as_image(file_bytes, filename):
+    """Turn an uploaded file (image or PDF) into a PIL RGB image.
+    For a PDF, the first page is rasterized."""
+    from PIL import Image
+    ext = os.path.splitext(filename or "")[1].lower()
+    if ext == ".pdf" or file_bytes[:4] == b"%PDF":
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        page = doc.load_page(0)
+        pix = page.get_pixmap(matrix=fitz.Matrix(200 / 72, 200 / 72))  # 200 DPI
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        doc.close()
+        return img
+    return Image.open(io.BytesIO(file_bytes)).convert("RGB")
+
+
+def _apply_crop(img, crop):
+    """crop = dict with x,y,width,height in PIXELS relative to the image.
+    Returns the cropped PIL image (or the whole image if crop is missing)."""
+    if not crop:
+        return img
+    try:
+        x = max(0, int(crop["x"]))
+        y = max(0, int(crop["y"]))
+        w = int(crop["width"])
+        h = int(crop["height"])
+        if w <= 0 or h <= 0:
+            return img
+        return img.crop((x, y, min(x + w, img.width), min(y + h, img.height)))
+    except (KeyError, ValueError, TypeError):
+        return img
+
+
+def compose_id_card_pdf(front_bytes, front_name, front_crop,
+                        back_bytes, back_name, back_crop):
+    """Place two (cropped) ID-card sides SIDE BY SIDE on one A4 portrait page.
+    Returns PDF bytes. Cards are scaled as large as fit while keeping aspect."""
+    from PIL import Image
+
+    front = _apply_crop(_load_as_image(front_bytes, front_name), front_crop)
+    back = _apply_crop(_load_as_image(back_bytes, back_name), back_crop)
+
+    # A4 portrait at 200 DPI
+    DPI = 200
+    A4_W = int(8.27 * DPI)   # ~1654 px
+    A4_H = int(11.69 * DPI)  # ~2339 px
+    MARGIN = int(0.4 * DPI)
+    GAP = int(0.3 * DPI)
+
+    canvas = Image.new("RGB", (A4_W, A4_H), "white")
+
+    # Each card gets half the usable width (minus margins + gap).
+    usable_w = A4_W - 2 * MARGIN - GAP
+    cell_w = usable_w // 2
+    cell_h = A4_H - 2 * MARGIN
+
+    def fit(card):
+        # Scale to fit within (cell_w, cell_h) preserving aspect ratio.
+        scale = min(cell_w / card.width, cell_h / card.height)
+        new_size = (max(1, int(card.width * scale)), max(1, int(card.height * scale)))
+        return card.resize(new_size, Image.LANCZOS)
+
+    f_img = fit(front)
+    b_img = fit(back)
+
+    # Vertically center each card in its cell; place left and right.
+    y_f = MARGIN + (cell_h - f_img.height) // 2
+    y_b = MARGIN + (cell_h - b_img.height) // 2
+    x_f = MARGIN + (cell_w - f_img.width) // 2
+    x_b = MARGIN + cell_w + GAP + (cell_w - b_img.width) // 2
+
+    canvas.paste(f_img, (x_f, y_f))
+    canvas.paste(b_img, (x_b, y_b))
+
+    out = io.BytesIO()
+    canvas.save(out, format="PDF", resolution=DPI)
+    return out.getvalue()
+
+
+@app.route("/id-card-preview", methods=["POST"])
+def id_card_preview():
+    """Compose the two sides and return the combined PDF for preview."""
+    front = request.files.get("front")
+    back = request.files.get("back")
+    if not front or not back:
+        return jsonify({"error": "Both front and back images are required"}), 400
+    try:
+        front_crop = json.loads(request.form.get("front_crop", "null"))
+        back_crop = json.loads(request.form.get("back_crop", "null"))
+        pdf_bytes = compose_id_card_pdf(
+            front.read(), front.filename, front_crop,
+            back.read(), back.filename, back_crop,
+        )
+    except Exception as e:
+        print(f"❌ ID card compose failed: {e}")
+        import traceback; traceback.print_exc()
+        return jsonify({"error": "Compose failed", "detail": str(e)}), 500
+
+    resp = send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf", as_attachment=False)
+    resp.headers["X-Total-Pages"] = "1"
+    return resp
+
+
 # --- Upload PDF (after user confirms preview) ---
 @app.route("/upload", methods=["POST"])
 def upload_pdf():
     print("=== UPLOAD PROCESS STARTED ===")
-    
-    file = request.files.get("file")
+
     customer_id = request.form.get("customer_id")
-    
-    if not file or not customer_id:
-        print("❌ ERROR: Missing file or customer_id")
-        return jsonify({"error": "Missing file or customer_id"}), 400
+    is_id_card = request.form.get("mode") == "id_card"
+
+    # --- ID-card mode: compose the two sides into a single PDF first ---
+    id_card_bytes = None
+    if is_id_card:
+        front = request.files.get("front")
+        back = request.files.get("back")
+        if not front or not back or not customer_id:
+            return jsonify({"error": "Both sides and customer_id are required"}), 400
+        try:
+            front_crop = json.loads(request.form.get("front_crop", "null"))
+            back_crop = json.loads(request.form.get("back_crop", "null"))
+            id_card_bytes = compose_id_card_pdf(
+                front.read(), front.filename, front_crop,
+                back.read(), back.filename, back_crop,
+            )
+        except Exception as e:
+            print(f"❌ ID card compose failed: {e}")
+            return jsonify({"error": "ID card compose failed", "detail": str(e)}), 500
+        file = None  # no single uploaded file in this mode
+    else:
+        file = request.files.get("file")
+        if not file or not customer_id:
+            print("❌ ERROR: Missing file or customer_id")
+            return jsonify({"error": "Missing file or customer_id"}), 400
 
     # Get copies from request, default to 1
     try:
@@ -413,15 +536,17 @@ def upload_pdf():
     
     print(f"📁 Copies requested: {copies}")
 
-    original_filename = secure_filename(file.filename)
+    if is_id_card:
+        original_filename = "id_card.pdf"
+        file_bytes = id_card_bytes
+    else:
+        original_filename = secure_filename(file.filename)
+        file_bytes = file.read()
     filename = f"{uuid.uuid4()}_{original_filename}"
-    
+
     print(f"📁 File: {original_filename}")
     print(f"👤 Customer ID: {customer_id}")
     print(f"🔧 Generated filename: {filename}")
-
-    # Read file bytes
-    file_bytes = file.read()
     print(f"📄 File size: {len(file_bytes)} bytes")
 
     mime_type, _ = mimetypes.guess_type(original_filename)
@@ -430,9 +555,14 @@ def upload_pdf():
     print(f"📋 MIME type: {mime_type}")
 
     # Get processing options from request
-    page_range_str = request.form.get("pages", "").strip()
-    orientation = request.form.get("orientation", "portrait")
     color_mode = request.form.get("color_mode", "bw")
+    if is_id_card:
+        # Already a finished single A4 page — don't re-orient or page-range it.
+        page_range_str = ""
+        orientation = "portrait"
+    else:
+        page_range_str = request.form.get("pages", "").strip()
+        orientation = request.form.get("orientation", "portrait")
 
     print(f"⚙️  Settings - Orientation: {orientation}, Color: {color_mode}, Page range: '{page_range_str}'")
 

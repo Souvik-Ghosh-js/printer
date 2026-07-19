@@ -338,6 +338,13 @@
   </style>
   <!-- PDF.js library for mobile devices -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <!-- Cropper.js for ID-card cropping -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
+  <style>
+    .idc-crop-wrap { max-height: 320px; margin: 8px 0; }
+    #id-card-panel input[type=file] { margin-bottom: 6px; }
+  </style>
 </head>
 
 <body>
@@ -351,6 +358,43 @@
   <div class="container">
     <!-- Form Section -->
     <div class="form-section">
+
+      <!-- Print mode selector -->
+      <label>What do you want to print?</label>
+      <select id="print-mode">
+        <option value="document">Document (PDF)</option>
+        <option value="id_card">ID Card — both sides on one page</option>
+      </select>
+
+      <!-- ID CARD PANEL (shown only in id_card mode) -->
+      <div id="id-card-panel" style="display:none;">
+        <div class="info-box">
+          Upload the <strong>front</strong> and <strong>back</strong> of your ID (Aadhaar,
+          Voter, PAN, etc.). Crop each to just the card — both will be placed side by side
+          on one page.
+        </div>
+
+        <label>Front side (image or PDF)</label>
+        <input type="file" id="id-front-file" accept="image/*,application/pdf">
+        <div class="idc-crop-wrap"><img id="id-front-img" style="max-width:100%;display:none;"></div>
+
+        <label>Back side (image or PDF)</label>
+        <input type="file" id="id-back-file" accept="image/*,application/pdf">
+        <div class="idc-crop-wrap"><img id="id-back-img" style="max-width:100%;display:none;"></div>
+
+        <label>Print Color</label>
+        <select id="id-color-mode">
+          <option value="bw">Black &amp; White (₹3/page)</option>
+          <option value="color">Color (₹10/page)</option>
+        </select>
+
+        <label>Number of Copies</label>
+        <input type="number" id="id-copies" min="1" max="20" value="1">
+
+        <button type="button" id="id-generate-btn" style="margin-top:12px;">Generate Preview</button>
+      </div>
+
+      <!-- NORMAL DOCUMENT FORM -->
       <form id="upload-form" enctype="multipart/form-data">
         <label>Choose PDF</label>
         <input type="file" name="file" accept="application/pdf" required>
@@ -930,6 +974,12 @@
       });
 
       printBtn.addEventListener("click", async function () {
+        // ID-card mode uses its own submit path.
+        if (document.getElementById("print-mode").value === "id_card") {
+          if (!idSubmitReady) return alert("Please generate the preview first.");
+          return submitIdCard();
+        }
+
         if (!selectedFile) return alert("No file selected.");
 
         // Validate copies
@@ -1106,6 +1156,161 @@ proceedPaymentBtn.addEventListener("click", async function () {
 
       // Check URL parameters on page load
       checkUrlForPaymentStatus();
+
+      // =====================================================================
+      //  ID CARD (both sides on one page)
+      // =====================================================================
+      const printMode = document.getElementById("print-mode");
+      const idPanel = document.getElementById("id-card-panel");
+      const normalForm = document.getElementById("upload-form");
+      const idFrontFile = document.getElementById("id-front-file");
+      const idBackFile = document.getElementById("id-back-file");
+      const idFrontImg = document.getElementById("id-front-img");
+      const idBackImg = document.getElementById("id-back-img");
+      const idColorMode = document.getElementById("id-color-mode");
+      const idCopies = document.getElementById("id-copies");
+      const idGenerateBtn = document.getElementById("id-generate-btn");
+
+      let frontCropper = null, backCropper = null;
+
+      // Toggle between document mode and ID-card mode
+      printMode.addEventListener("change", () => {
+        const isId = printMode.value === "id_card";
+        idPanel.style.display = isId ? "block" : "none";
+        normalForm.style.display = isId ? "none" : "block";
+        // The normal per-page pricing note still applies.
+      });
+
+      function setupCropper(fileInput, imgEl, which) {
+        fileInput.addEventListener("change", () => {
+          const f = fileInput.files[0];
+          if (!f) return;
+
+          const showImage = (dataUrl) => {
+            imgEl.src = dataUrl;
+            imgEl.style.display = "block";
+            // Destroy any previous cropper on this image
+            if (which === "front" && frontCropper) frontCropper.destroy();
+            if (which === "back" && backCropper) backCropper.destroy();
+            const cropper = new Cropper(imgEl, {
+              viewMode: 1, autoCropArea: 0.9, background: false, movable: false,
+              zoomable: false, rotatable: false,
+            });
+            if (which === "front") frontCropper = cropper; else backCropper = cropper;
+          };
+
+          // PDFs: render first page to an image via pdf.js, then crop that.
+          if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+              const pdf = await pdfjsLib.getDocument(new Uint8Array(e.target.result)).promise;
+              const page = await pdf.getPage(1);
+              const viewport = page.getViewport({ scale: 2 });
+              const canvas = document.createElement("canvas");
+              canvas.width = viewport.width; canvas.height = viewport.height;
+              await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+              showImage(canvas.toDataURL("image/png"));
+            };
+            reader.readAsArrayBuffer(f);
+          } else {
+            const reader = new FileReader();
+            reader.onload = (e) => showImage(e.target.result);
+            reader.readAsDataURL(f);
+          }
+        });
+      }
+      setupCropper(idFrontFile, idFrontImg, "front");
+      setupCropper(idBackFile, idBackImg, "back");
+
+      // Get the crop box in ORIGINAL image pixels (what the server expects).
+      function cropData(cropper) {
+        if (!cropper) return null;
+        const c = cropper.getData(true);  // rounded, in natural-image pixels
+        return { x: c.x, y: c.y, width: c.width, height: c.height };
+      }
+
+      // Build a Blob of the source file to send (server re-crops from originals).
+      function fileBlob(fileInput) {
+        return fileInput.files[0] || null;
+      }
+
+      idGenerateBtn.addEventListener("click", async () => {
+        if (!fileBlob(idFrontFile) || !fileBlob(idBackFile)) {
+          alert("Please upload both the front and back sides.");
+          return;
+        }
+        const fd = new FormData();
+        fd.append("front", fileBlob(idFrontFile));
+        fd.append("back", fileBlob(idBackFile));
+        fd.append("front_crop", JSON.stringify(cropData(frontCropper)));
+        fd.append("back_crop", JSON.stringify(cropData(backCropper)));
+
+        previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Composing ID card...</p></div>`;
+        try {
+          const res = await fetch("/id-card-preview", { method: "POST", body: fd });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            previewBox.innerHTML = `<p style="color:red">Preview failed: ${err.error || 'error'}</p>`;
+            return;
+          }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          previewBox.innerHTML = "";
+          const embed = document.createElement("embed");
+          embed.src = url; embed.type = "application/pdf";
+          embed.style.width = "100%"; embed.style.height = "500px";
+          previewBox.appendChild(embed);
+          // Apply grayscale preview if B/W selected
+          previewBox.style.filter = (idColorMode.value === "color") ? "none" : "grayscale(1)";
+
+          // Price: it's one page -> use per-page rate.
+          const perPage = idColorMode.value === "color" ? 10 : 3;
+          totalPagesEl.textContent = "1";
+          estimatedPriceEl.textContent = (perPage * (parseInt(idCopies.value) || 1)).toFixed(2);
+          printBtn.disabled = false;
+          idSubmitReady = true;
+        } catch (e) {
+          previewBox.innerHTML = `<p style="color:red">Preview failed: ${e.message}</p>`;
+        }
+      });
+
+      // Flag so the Print button knows to submit via the ID-card path.
+      let idSubmitReady = false;
+      printMode.addEventListener("change", () => { idSubmitReady = false; printBtn.disabled = true; });
+
+      // Submit the ID-card job through /upload (mode=id_card) and open the modal.
+      async function submitIdCard() {
+        const copies = parseInt(idCopies.value) || 1;
+        const fd = new FormData();
+        fd.append("mode", "id_card");
+        fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
+        fd.append("front", fileBlob(idFrontFile));
+        fd.append("back", fileBlob(idBackFile));
+        fd.append("front_crop", JSON.stringify(cropData(frontCropper)));
+        fd.append("back_crop", JSON.stringify(cropData(backCropper)));
+        fd.append("color_mode", idColorMode.value || "bw");
+        fd.append("copies", copies);
+        fd.append("sides", "single");
+        fd.append("paper_size", "A4");
+
+        uploadResult.textContent = "Processing...";
+        const res = await fetch("/upload", { method: "POST", body: fd });
+        const data = await res.json();
+        if (res.ok && data.primary_job_id) {
+          jobId = data.primary_job_id;
+          printJobId.textContent = jobId;
+          printTotalPages.textContent = 1;
+          printCopies.textContent = copies;
+          printOrientation.textContent = "portrait";
+          printPageRange.textContent = "ID card";
+          printPricePerCopy.textContent = data.price_per_copy || "0.00";
+          printTotalAmount.textContent = data.total_price || "0.00";
+          document.getElementById("print-modal").style.display = "flex";
+        } else {
+          uploadResult.textContent = "Failed: " + (data.error || "unknown error");
+          uploadResult.style.color = "red";
+        }
+      }
 
     })();
   </script>
