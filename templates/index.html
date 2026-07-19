@@ -344,6 +344,13 @@
   <style>
     .idc-crop-wrap { max-height: 320px; margin: 8px 0; }
     #id-card-panel input[type=file] { margin-bottom: 6px; }
+    .idc-loader { text-align: center; color: #555; padding: 20px; }
+    .idc-tools { margin: 6px 0 14px; }
+    .idc-tools button {
+      padding: 6px 12px; margin-right: 8px; cursor: pointer;
+      border: 1px solid #ccc; border-radius: 5px; background: #f7f7f7;
+    }
+    .idc-tools button:hover { background: #eee; }
   </style>
 </head>
 
@@ -376,11 +383,21 @@
 
         <label>Front side (image or PDF)</label>
         <input type="file" id="id-front-file" accept="image/*,application/pdf">
+        <div id="id-front-loader" class="idc-loader" style="display:none;"><div class="spinner"></div><p>Loading image…</p></div>
         <div class="idc-crop-wrap"><img id="id-front-img" style="max-width:100%;display:none;"></div>
+        <div id="id-front-tools" class="idc-tools" style="display:none;">
+          <button type="button" data-side="front" data-dir="left">⟲ Rotate left</button>
+          <button type="button" data-side="front" data-dir="right">⟳ Rotate right</button>
+        </div>
 
         <label>Back side (image or PDF)</label>
         <input type="file" id="id-back-file" accept="image/*,application/pdf">
+        <div id="id-back-loader" class="idc-loader" style="display:none;"><div class="spinner"></div><p>Loading image…</p></div>
         <div class="idc-crop-wrap"><img id="id-back-img" style="max-width:100%;display:none;"></div>
+        <div id="id-back-tools" class="idc-tools" style="display:none;">
+          <button type="button" data-side="back" data-dir="left">⟲ Rotate left</button>
+          <button type="button" data-side="back" data-dir="right">⟳ Rotate right</button>
+        </div>
 
         <label>Layout</label>
         <select id="id-layout">
@@ -1189,9 +1206,18 @@ proceedPaymentBtn.addEventListener("click", async function () {
       });
 
       function setupCropper(fileInput, imgEl, which) {
+        const loader = document.getElementById(`id-${which}-loader`);
+        const tools = document.getElementById(`id-${which}-tools`);
+
         fileInput.addEventListener("change", () => {
           const f = fileInput.files[0];
           if (!f) return;
+
+          // Show loader immediately while we read/render the file.
+          loader.style.display = "block";
+          imgEl.style.display = "none";
+          tools.style.display = "none";
+          idSubmitReady = false; printBtn.disabled = true;
 
           const showImage = (dataUrl) => {
             imgEl.src = dataUrl;
@@ -1201,7 +1227,12 @@ proceedPaymentBtn.addEventListener("click", async function () {
             if (which === "back" && backCropper) backCropper.destroy();
             const cropper = new Cropper(imgEl, {
               viewMode: 1, autoCropArea: 0.9, background: false, movable: false,
-              zoomable: false, rotatable: false,
+              zoomable: false, rotatable: true,   // allow rotation for sideways cards
+              ready() {
+                // Image + cropper fully ready: hide loader, show tools.
+                loader.style.display = "none";
+                tools.style.display = "block";
+              },
             });
             if (which === "front") frontCropper = cropper; else backCropper = cropper;
           };
@@ -1210,13 +1241,17 @@ proceedPaymentBtn.addEventListener("click", async function () {
           if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
             const reader = new FileReader();
             reader.onload = async (e) => {
-              const pdf = await pdfjsLib.getDocument(new Uint8Array(e.target.result)).promise;
-              const page = await pdf.getPage(1);
-              const viewport = page.getViewport({ scale: 2 });
-              const canvas = document.createElement("canvas");
-              canvas.width = viewport.width; canvas.height = viewport.height;
-              await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-              showImage(canvas.toDataURL("image/png"));
+              try {
+                const pdf = await pdfjsLib.getDocument(new Uint8Array(e.target.result)).promise;
+                const page = await pdf.getPage(1);
+                const viewport = page.getViewport({ scale: 2 });
+                const canvas = document.createElement("canvas");
+                canvas.width = viewport.width; canvas.height = viewport.height;
+                await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+                showImage(canvas.toDataURL("image/png"));
+              } catch (err) {
+                loader.innerHTML = `<p style="color:red">Could not load PDF: ${err.message}</p>`;
+              }
             };
             reader.readAsArrayBuffer(f);
           } else {
@@ -1229,28 +1264,41 @@ proceedPaymentBtn.addEventListener("click", async function () {
       setupCropper(idFrontFile, idFrontImg, "front");
       setupCropper(idBackFile, idBackImg, "back");
 
-      // Get the crop box in ORIGINAL image pixels (what the server expects).
-      function cropData(cropper) {
-        if (!cropper) return null;
-        const c = cropper.getData(true);  // rounded, in natural-image pixels
-        return { x: c.x, y: c.y, width: c.width, height: c.height };
-      }
+      // Rotate buttons — rotate the cropper 90° and invalidate the preview.
+      document.querySelectorAll(".idc-tools button").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const cropper = btn.dataset.side === "front" ? frontCropper : backCropper;
+          if (!cropper) return;
+          cropper.rotate(btn.dataset.dir === "left" ? -90 : 90);
+          idSubmitReady = false; printBtn.disabled = true;
+        });
+      });
 
-      // Build a Blob of the source file to send (server re-crops from originals).
-      function fileBlob(fileInput) {
-        return fileInput.files[0] || null;
+      // Export the cropped + rotated result from a cropper as a PNG Blob.
+      // Rotation is baked in here, so the server just places the image as-is
+      // (no separate crop coords needed — avoids rotation/crop mismatches).
+      function croppedBlob(cropper) {
+        return new Promise((resolve) => {
+          if (!cropper) return resolve(null);
+          const canvas = cropper.getCroppedCanvas({
+            maxWidth: 2000, maxHeight: 2000,
+            imageSmoothingQuality: "high",
+          });
+          if (!canvas) return resolve(null);
+          canvas.toBlob((b) => resolve(b), "image/png");
+        });
       }
 
       idGenerateBtn.addEventListener("click", async () => {
-        if (!fileBlob(idFrontFile) || !fileBlob(idBackFile)) {
+        if (!frontCropper || !backCropper) {
           alert("Please upload both the front and back sides.");
           return;
         }
+        const frontBlob = await croppedBlob(frontCropper);
+        const backBlob = await croppedBlob(backCropper);
         const fd = new FormData();
-        fd.append("front", fileBlob(idFrontFile));
-        fd.append("back", fileBlob(idBackFile));
-        fd.append("front_crop", JSON.stringify(cropData(frontCropper)));
-        fd.append("back_crop", JSON.stringify(cropData(backCropper)));
+        fd.append("front", frontBlob, "front.png");
+        fd.append("back", backBlob, "back.png");
         fd.append("layout", idLayout.value);
 
         // Loading state: spinner in the preview box + button feedback.
@@ -1301,13 +1349,13 @@ proceedPaymentBtn.addEventListener("click", async function () {
       // Submit the ID-card job through /upload (mode=id_card) and open the modal.
       async function submitIdCard() {
         const copies = parseInt(idCopies.value) || 1;
+        const frontBlob = await croppedBlob(frontCropper);
+        const backBlob = await croppedBlob(backCropper);
         const fd = new FormData();
         fd.append("mode", "id_card");
         fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
-        fd.append("front", fileBlob(idFrontFile));
-        fd.append("back", fileBlob(idBackFile));
-        fd.append("front_crop", JSON.stringify(cropData(frontCropper)));
-        fd.append("back_crop", JSON.stringify(cropData(backCropper)));
+        fd.append("front", frontBlob, "front.png");
+        fd.append("back", backBlob, "back.png");
         fd.append("layout", idLayout.value);
         fd.append("color_mode", idColorMode.value || "bw");
         fd.append("copies", copies);
