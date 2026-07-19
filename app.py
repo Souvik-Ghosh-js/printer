@@ -423,9 +423,13 @@ def _apply_crop(img, crop):
 
 
 def compose_id_card_pdf(front_bytes, front_name, front_crop,
-                        back_bytes, back_name, back_crop):
-    """Place two (cropped) ID-card sides SIDE BY SIDE on one A4 portrait page.
-    Returns PDF bytes. Cards are scaled as large as fit while keeping aspect."""
+                        back_bytes, back_name, back_crop, layout="side_by_side"):
+    """Place two (cropped) ID-card sides on one A4 portrait page.
+
+    layout = 'side_by_side' (left/right) or 'top_bottom' (stacked).
+    Cards are scaled as large as fit in their cell while keeping aspect ratio.
+    Returns PDF bytes.
+    """
     from PIL import Image
 
     front = _apply_crop(_load_as_image(front_bytes, front_name), front_crop)
@@ -440,25 +444,37 @@ def compose_id_card_pdf(front_bytes, front_name, front_crop,
 
     canvas = Image.new("RGB", (A4_W, A4_H), "white")
 
-    # Each card gets half the usable width (minus margins + gap).
-    usable_w = A4_W - 2 * MARGIN - GAP
-    cell_w = usable_w // 2
-    cell_h = A4_H - 2 * MARGIN
+    if layout == "top_bottom":
+        # Two full-width cells stacked vertically.
+        cell_w = A4_W - 2 * MARGIN
+        cell_h = (A4_H - 2 * MARGIN - GAP) // 2
+    else:
+        # Two cells side by side.
+        cell_w = (A4_W - 2 * MARGIN - GAP) // 2
+        cell_h = A4_H - 2 * MARGIN
 
     def fit(card):
-        # Scale to fit within (cell_w, cell_h) preserving aspect ratio.
         scale = min(cell_w / card.width, cell_h / card.height)
-        new_size = (max(1, int(card.width * scale)), max(1, int(card.height * scale)))
-        return card.resize(new_size, Image.LANCZOS)
+        return card.resize(
+            (max(1, int(card.width * scale)), max(1, int(card.height * scale))),
+            Image.LANCZOS,
+        )
 
     f_img = fit(front)
     b_img = fit(back)
 
-    # Vertically center each card in its cell; place left and right.
-    y_f = MARGIN + (cell_h - f_img.height) // 2
-    y_b = MARGIN + (cell_h - b_img.height) // 2
-    x_f = MARGIN + (cell_w - f_img.width) // 2
-    x_b = MARGIN + cell_w + GAP + (cell_w - b_img.width) // 2
+    if layout == "top_bottom":
+        # Front on top, back below; each centered horizontally in its cell.
+        x_f = MARGIN + (cell_w - f_img.width) // 2
+        x_b = MARGIN + (cell_w - b_img.width) // 2
+        y_f = MARGIN + (cell_h - f_img.height) // 2
+        y_b = MARGIN + cell_h + GAP + (cell_h - b_img.height) // 2
+    else:
+        # Front on left, back on right; each centered vertically in its cell.
+        y_f = MARGIN + (cell_h - f_img.height) // 2
+        y_b = MARGIN + (cell_h - b_img.height) // 2
+        x_f = MARGIN + (cell_w - f_img.width) // 2
+        x_b = MARGIN + cell_w + GAP + (cell_w - b_img.width) // 2
 
     canvas.paste(f_img, (x_f, y_f))
     canvas.paste(b_img, (x_b, y_b))
@@ -478,9 +494,10 @@ def id_card_preview():
     try:
         front_crop = json.loads(request.form.get("front_crop", "null"))
         back_crop = json.loads(request.form.get("back_crop", "null"))
+        layout = request.form.get("layout", "side_by_side")
         pdf_bytes = compose_id_card_pdf(
             front.read(), front.filename, front_crop,
-            back.read(), back.filename, back_crop,
+            back.read(), back.filename, back_crop, layout,
         )
     except Exception as e:
         print(f"❌ ID card compose failed: {e}")
@@ -510,9 +527,10 @@ def upload_pdf():
         try:
             front_crop = json.loads(request.form.get("front_crop", "null"))
             back_crop = json.loads(request.form.get("back_crop", "null"))
+            layout = request.form.get("layout", "side_by_side")
             id_card_bytes = compose_id_card_pdf(
                 front.read(), front.filename, front_crop,
-                back.read(), back.filename, back_crop,
+                back.read(), back.filename, back_crop, layout,
             )
         except Exception as e:
             print(f"❌ ID card compose failed: {e}")
