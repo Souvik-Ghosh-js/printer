@@ -422,6 +422,11 @@
         <label>Choose PDF</label>
         <input type="file" name="file" accept="application/pdf" required>
 
+        <button type="button" id="enhance-btn" style="margin:8px 0; display:none;">
+          ✨ Enhance / Scan pages (crop, brightness, B&amp;W)
+        </button>
+        <div id="enhance-status" class="info-box" style="display:none;"></div>
+
         <label>Orientation</label>
         <select name="orientation">
           <option value="portrait">Portrait</option>
@@ -475,6 +480,38 @@
         <button id="prev-page">Previous</button>
         <span id="page-num" class="page-info">Page: 1 of 1</span>
         <button id="next-page">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Enhance / Scan Editor Modal -->
+  <div id="enhance-modal" class="print-modal">
+    <div class="print-modal-content" style="max-width:720px; width:92%;">
+      <h3 style="margin-top:0;">Enhance / Scan pages</h3>
+      <div id="enhance-page-label" style="margin-bottom:8px;">Page 1</div>
+      <div id="enhance-canvas-wrap" style="max-height:52vh; overflow:auto; text-align:center; background:#f4f4f4;">
+        <img id="enhance-img" style="max-width:100%; display:block; margin:auto;">
+      </div>
+      <div style="margin-top:12px;">
+        <label style="display:block;">Brightness: <span id="bri-val">0</span></label>
+        <input type="range" id="bri-slider" min="-100" max="100" value="0" style="width:100%;">
+        <label style="display:block;">Contrast: <span id="con-val">0</span></label>
+        <input type="range" id="con-slider" min="-100" max="100" value="0" style="width:100%;">
+        <div style="margin-top:8px;">
+          <button type="button" id="enh-bw">B&amp;W scan</button>
+          <button type="button" id="enh-auto">Auto-enhance</button>
+          <button type="button" id="enh-reset">Reset</button>
+        </div>
+      </div>
+      <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <button type="button" id="enh-prev">‹ Prev</button>
+          <button type="button" id="enh-next">Next ›</button>
+        </div>
+        <div>
+          <button type="button" id="enh-cancel">Cancel</button>
+          <button type="button" id="enh-done">Done</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1016,14 +1053,20 @@
 
         const form = document.getElementById("upload-form");
         const fd = new FormData();
-        fd.append("file", selectedFile);
         fd.append("customer_id", "123e4567-e89b-12d3-a456-426614174000");
-        fd.append("orientation", form.orientation.value);
         fd.append("color_mode", colorModeSelect.value || "bw");
         fd.append("copies", copies);
-        fd.append("pages", pagesVal);
         fd.append("sides", "single");
         fd.append("paper_size", "A4");
+        if (enhancedReady && enhancedBlobs) {
+          // Use the enhanced/scanned pages instead of the raw file.
+          fd.append("mode", "enhanced");
+          enhancedBlobs.forEach((b, i) => fd.append("pages", b, `page${i + 1}.jpg`));
+        } else {
+          fd.append("file", selectedFile);
+          fd.append("orientation", form.orientation.value);
+          fd.append("pages", pagesVal);
+        }
 
         uploadResult.textContent = "Processing...";
         printBtn.disabled = true;
@@ -1410,6 +1453,174 @@ proceedPaymentBtn.addEventListener("click", async function () {
           printBtn.textContent = _pt;
         }
       }
+
+      // =====================================================================
+      //  ENHANCE / SCAN (doc-scanner) — per-page crop + brightness/contrast
+      // =====================================================================
+      const ENH_MAX_PAGES = 30;
+      const ENH_MAX_DIM = 1400;   // downscale each page (perf)
+      const enhanceBtn = document.getElementById("enhance-btn");
+      const enhanceStatus = document.getElementById("enhance-status");
+      const enhanceModal = document.getElementById("enhance-modal");
+      const enhImg = document.getElementById("enhance-img");
+      const enhPageLabel = document.getElementById("enhance-page-label");
+      const briSlider = document.getElementById("bri-slider");
+      const conSlider = document.getElementById("con-slider");
+      const briVal = document.getElementById("bri-val");
+      const conVal = document.getElementById("con-val");
+
+      let enhPages = [];        // [{dataUrl, bri, con, bw, cropper}] per page
+      let enhIndex = 0;
+      let enhCropper = null;
+      let enhancedReady = false;   // true once user finishes editing
+      let enhancedBlobs = null;    // final edited page blobs
+
+      // Show the Enhance button only when a PDF is selected in document mode.
+      const docFileInput = document.querySelector('#upload-form input[name="file"]');
+      docFileInput.addEventListener("change", () => {
+        enhancedReady = false; enhancedBlobs = null;
+        enhanceStatus.style.display = "none";
+        enhanceBtn.style.display = docFileInput.files[0] ? "inline-block" : "none";
+      });
+
+      // Rasterize all PDF pages (downscaled) into enhPages.
+      async function loadPdfPages(file) {
+        const buf = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument(new Uint8Array(buf)).promise;
+        const n = Math.min(pdf.numPages, ENH_MAX_PAGES);
+        const pages = [];
+        for (let i = 1; i <= n; i++) {
+          const page = await pdf.getPage(i);
+          let viewport = page.getViewport({ scale: 1 });
+          const scale = Math.min(ENH_MAX_DIM / viewport.width, ENH_MAX_DIM / viewport.height, 2);
+          viewport = page.getViewport({ scale });
+          const canvas = document.createElement("canvas");
+          canvas.width = viewport.width; canvas.height = viewport.height;
+          await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+          pages.push({ dataUrl: canvas.toDataURL("image/jpeg", 0.9), bri: 0, con: 0, bw: false });
+        }
+        return { pages, truncated: pdf.numPages > n, total: pdf.numPages };
+      }
+
+      function applyEnhFilter() {
+        const p = enhPages[enhIndex];
+        // CSS filter for live preview (brightness/contrast %, grayscale).
+        const b = 100 + p.bri;      // 0..200%
+        const c = 100 + p.con;      // 0..200%
+        const gray = p.bw ? "grayscale(1) contrast(1.4)" : "";
+        enhImg.style.filter = `brightness(${b}%) contrast(${c}%) ${gray}`;
+      }
+
+      function saveCurrentCrop() {
+        if (enhCropper && enhPages[enhIndex]) {
+          const c = enhCropper.getCroppedCanvas();
+          if (c) enhPages[enhIndex].crop = c.toDataURL("image/jpeg", 0.92);
+        }
+      }
+
+      function showEnhPage(idx) {
+        saveCurrentCrop();          // persist the page we're leaving
+        enhIndex = idx;
+        const p = enhPages[idx];
+        enhPageLabel.textContent = `Page ${idx + 1} of ${enhPages.length}`;
+        briSlider.value = p.bri; conSlider.value = p.con;
+        briVal.textContent = p.bri; conVal.textContent = p.con;
+        if (enhCropper) { enhCropper.destroy(); enhCropper = null; }
+        enhImg.src = p.dataUrl;
+        enhImg.onload = () => {
+          enhCropper = new Cropper(enhImg, {
+            viewMode: 0, autoCropArea: 1, background: false, zoomable: false, rotatable: false,
+            ready() { applyEnhFilter(); },
+          });
+          applyEnhFilter();
+        };
+        document.getElementById("enh-prev").disabled = idx === 0;
+        document.getElementById("enh-next").disabled = idx === enhPages.length - 1;
+      }
+
+      enhanceBtn.addEventListener("click", async () => {
+        const f = docFileInput.files[0];
+        if (!f) return;
+        enhanceStatus.style.display = "block";
+        enhanceStatus.textContent = "Loading pages…";
+        try {
+          const { pages, truncated, total } = await loadPdfPages(f);
+          enhPages = pages;
+          if (truncated) {
+            enhanceStatus.textContent = `Note: only the first ${ENH_MAX_PAGES} of ${total} pages can be enhanced.`;
+          } else {
+            enhanceStatus.style.display = "none";
+          }
+          enhIndex = 0;
+          enhanceModal.style.display = "flex";
+          showEnhPage(0);
+        } catch (e) {
+          enhanceStatus.textContent = "Could not load pages: " + e.message;
+        }
+      });
+
+      // Sliders
+      briSlider.addEventListener("input", () => {
+        enhPages[enhIndex].bri = parseInt(briSlider.value);
+        briVal.textContent = briSlider.value; applyEnhFilter();
+      });
+      conSlider.addEventListener("input", () => {
+        enhPages[enhIndex].con = parseInt(conSlider.value);
+        conVal.textContent = conSlider.value; applyEnhFilter();
+      });
+      document.getElementById("enh-bw").addEventListener("click", () => {
+        enhPages[enhIndex].bw = !enhPages[enhIndex].bw; applyEnhFilter();
+      });
+      document.getElementById("enh-auto").addEventListener("click", () => {
+        const p = enhPages[enhIndex];
+        p.bri = 10; p.con = 35; // simple auto-enhance preset
+        briSlider.value = 10; conSlider.value = 35; briVal.textContent = 10; conVal.textContent = 35;
+        applyEnhFilter();
+      });
+      document.getElementById("enh-reset").addEventListener("click", () => {
+        const p = enhPages[enhIndex];
+        p.bri = 0; p.con = 0; p.bw = false;
+        briSlider.value = 0; conSlider.value = 0; briVal.textContent = 0; conVal.textContent = 0;
+        applyEnhFilter();
+      });
+      document.getElementById("enh-prev").addEventListener("click", () => { if (enhIndex > 0) showEnhPage(enhIndex - 1); });
+      document.getElementById("enh-next").addEventListener("click", () => { if (enhIndex < enhPages.length - 1) showEnhPage(enhIndex + 1); });
+      document.getElementById("enh-cancel").addEventListener("click", () => {
+        if (enhCropper) { enhCropper.destroy(); enhCropper = null; }
+        enhanceModal.style.display = "none";
+      });
+
+      // Bake each page's crop + brightness/contrast/bw into a final image blob.
+      function renderEnhPage(p) {
+        return new Promise((resolve) => {
+          const src = new Image();
+          src.onload = () => {
+            // crop region (in natural px) from that page's cropper is only live
+            // for the current page; for others we use full image. We saved edits
+            // per page, so re-apply filters via canvas here.
+            const canvas = document.createElement("canvas");
+            canvas.width = src.width; canvas.height = src.height;
+            const ctx = canvas.getContext("2d");
+            ctx.filter = `brightness(${100 + p.bri}%) contrast(${100 + p.con}%)${p.bw ? " grayscale(1)" : ""}`;
+            ctx.drawImage(src, 0, 0);
+            canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9);
+          };
+          src.src = p.crop || p.dataUrl;
+        });
+      }
+
+      document.getElementById("enh-done").addEventListener("click", async () => {
+        // Save the current page's crop before finishing.
+        if (enhCropper) {
+          const c = enhCropper.getCroppedCanvas();
+          if (c) enhPages[enhIndex].crop = c.toDataURL("image/jpeg", 0.92);
+        }
+        enhanceModal.style.display = "none";
+        enhancedReady = true;
+        enhancedBlobs = await Promise.all(enhPages.map(renderEnhPage));
+        enhanceStatus.style.display = "block";
+        enhanceStatus.textContent = `✓ ${enhancedBlobs.length} page(s) enhanced. Click Preview / Print to continue.`;
+      });
 
     })();
   </script>

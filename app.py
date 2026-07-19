@@ -485,6 +485,55 @@ def compose_id_card_pdf(front_bytes, front_name, front_crop,
     return out.getvalue()
 
 
+def build_pdf_from_images(image_files):
+    """Build a multi-page PDF from a list of page images (already edited
+    client-side). Each image becomes one A4-fit page. Returns PDF bytes."""
+    from PIL import Image
+
+    DPI = 200
+    A4_W = int(8.27 * DPI)
+    A4_H = int(11.69 * DPI)
+    MARGIN = int(0.3 * DPI)
+
+    pages = []
+    for f in image_files:
+        img = Image.open(io.BytesIO(f.read())).convert("RGB")
+        # Fit the edited page image within A4 (with a small margin), centered.
+        max_w = A4_W - 2 * MARGIN
+        max_h = A4_H - 2 * MARGIN
+        scale = min(max_w / img.width, max_h / img.height)
+        img = img.resize((max(1, int(img.width * scale)),
+                          max(1, int(img.height * scale))), Image.LANCZOS)
+        page = Image.new("RGB", (A4_W, A4_H), "white")
+        page.paste(img, ((A4_W - img.width) // 2, (A4_H - img.height) // 2))
+        pages.append(page)
+
+    if not pages:
+        raise ValueError("no pages to build")
+
+    out = io.BytesIO()
+    pages[0].save(out, format="PDF", resolution=DPI,
+                  save_all=True, append_images=pages[1:])
+    return out.getvalue()
+
+
+@app.route("/enhance-preview", methods=["POST"])
+def enhance_preview():
+    """Take the client-edited page images and return a combined PDF preview."""
+    files = request.files.getlist("pages")
+    if not files:
+        return jsonify({"error": "No pages provided"}), 400
+    try:
+        pdf_bytes = build_pdf_from_images(files)
+    except Exception as e:
+        print(f"❌ Enhance compose failed: {e}")
+        import traceback; traceback.print_exc()
+        return jsonify({"error": "Compose failed", "detail": str(e)}), 500
+    resp = send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf", as_attachment=False)
+    resp.headers["X-Total-Pages"] = str(len(files))
+    return resp
+
+
 @app.route("/id-card-preview", methods=["POST"])
 def id_card_preview():
     """Compose the two sides and return the combined PDF for preview."""
@@ -516,10 +565,13 @@ def upload_pdf():
     print("=== UPLOAD PROCESS STARTED ===")
 
     customer_id = request.form.get("customer_id")
-    is_id_card = request.form.get("mode") == "id_card"
+    mode = request.form.get("mode")
+    is_id_card = mode == "id_card"
+    is_enhanced = mode == "enhanced"
 
     # --- ID-card mode: compose the two sides into a single PDF first ---
     id_card_bytes = None
+    prebuilt_bytes = None
     if is_id_card:
         front = request.files.get("front")
         back = request.files.get("back")
@@ -537,6 +589,17 @@ def upload_pdf():
             print(f"❌ ID card compose failed: {e}")
             return jsonify({"error": "ID card compose failed", "detail": str(e)}), 500
         file = None  # no single uploaded file in this mode
+    elif is_enhanced:
+        # Enhanced (doc-scanner) mode: pages already edited client-side.
+        pages = request.files.getlist("pages")
+        if not pages or not customer_id:
+            return jsonify({"error": "Pages and customer_id are required"}), 400
+        try:
+            prebuilt_bytes = build_pdf_from_images(pages)
+        except Exception as e:
+            print(f"❌ Enhance compose failed: {e}")
+            return jsonify({"error": "Enhance compose failed", "detail": str(e)}), 500
+        file = None
     else:
         file = request.files.get("file")
         if not file or not customer_id:
@@ -558,6 +621,9 @@ def upload_pdf():
     if is_id_card:
         original_filename = "id_card.pdf"
         file_bytes = id_card_bytes
+    elif is_enhanced:
+        original_filename = "scanned_document.pdf"
+        file_bytes = prebuilt_bytes
     else:
         original_filename = secure_filename(file.filename)
         file_bytes = file.read()
@@ -575,8 +641,8 @@ def upload_pdf():
 
     # Get processing options from request
     color_mode = request.form.get("color_mode", "bw")
-    if is_id_card:
-        # Already a finished single A4 page — don't re-orient or page-range it.
+    if is_id_card or is_enhanced:
+        # Already a finished PDF — don't re-orient or page-range it.
         page_range_str = ""
         orientation = "portrait"
     else:
