@@ -1205,6 +1205,27 @@ proceedPaymentBtn.addEventListener("click", async function () {
         // The normal per-page pricing note still applies.
       });
 
+      // Downscale a dataURL so huge phone photos (4000px+) don't hang the
+      // browser in Cropper. 1400px is plenty for an ID card on paper.
+      const MAX_DIM = 1400;
+      function downscale(dataUrl) {
+        return new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            let { width: w, height: h } = img;
+            if (w <= MAX_DIM && h <= MAX_DIM) return resolve(dataUrl);
+            const scale = MAX_DIM / Math.max(w, h);
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.round(w * scale);
+            canvas.height = Math.round(h * scale);
+            canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL("image/jpeg", 0.9));
+          };
+          img.onerror = () => resolve(dataUrl);
+          img.src = dataUrl;
+        });
+      }
+
       function setupCropper(fileInput, imgEl, which) {
         const loader = document.getElementById(`id-${which}-loader`);
         const tools = document.getElementById(`id-${which}-tools`);
@@ -1213,23 +1234,23 @@ proceedPaymentBtn.addEventListener("click", async function () {
           const f = fileInput.files[0];
           if (!f) return;
 
-          // Show loader immediately while we read/render the file.
+          // Show loader immediately while we read/render/downscale the file.
           loader.style.display = "block";
           imgEl.style.display = "none";
           tools.style.display = "none";
           idSubmitReady = false; printBtn.disabled = true;
 
-          const showImage = (dataUrl) => {
+          const showImage = async (rawDataUrl) => {
+            const dataUrl = await downscale(rawDataUrl);   // <-- key perf fix
             imgEl.src = dataUrl;
             imgEl.style.display = "block";
-            // Destroy any previous cropper on this image
             if (which === "front" && frontCropper) frontCropper.destroy();
             if (which === "back" && backCropper) backCropper.destroy();
             const cropper = new Cropper(imgEl, {
-              viewMode: 1, autoCropArea: 0.9, background: false, movable: false,
-              zoomable: false, rotatable: true,   // allow rotation for sideways cards
+              // viewMode 0 = don't auto-zoom/fit on rotate (fixes zoom-in issue)
+              viewMode: 0, autoCropArea: 0.8, background: false,
+              movable: true, zoomable: false, rotatable: true,
               ready() {
-                // Image + cropper fully ready: hide loader, show tools.
                 loader.style.display = "none";
                 tools.style.display = "block";
               },
@@ -1237,7 +1258,6 @@ proceedPaymentBtn.addEventListener("click", async function () {
             if (which === "front") frontCropper = cropper; else backCropper = cropper;
           };
 
-          // PDFs: render first page to an image via pdf.js, then crop that.
           if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
             const reader = new FileReader();
             reader.onload = async (e) => {
@@ -1281,7 +1301,7 @@ proceedPaymentBtn.addEventListener("click", async function () {
         return new Promise((resolve) => {
           if (!cropper) return resolve(null);
           const canvas = cropper.getCroppedCanvas({
-            maxWidth: 2000, maxHeight: 2000,
+            maxWidth: 1400, maxHeight: 1400,
             imageSmoothingQuality: "high",
           });
           if (!canvas) return resolve(null);
@@ -1294,20 +1314,19 @@ proceedPaymentBtn.addEventListener("click", async function () {
           alert("Please upload both the front and back sides.");
           return;
         }
-        const frontBlob = await croppedBlob(frontCropper);
-        const backBlob = await croppedBlob(backCropper);
-        const fd = new FormData();
-        fd.append("front", frontBlob, "front.png");
-        fd.append("back", backBlob, "back.png");
-        fd.append("layout", idLayout.value);
-
-        // Loading state: spinner in the preview box + button feedback.
+        // Loading state FIRST — before any (async) canvas export or fetch.
         previewBox.style.filter = "none";  // clear any grayscale so spinner is clean
         previewBox.innerHTML = `<div id="loader"><div class="spinner"></div><p>Composing ID card…</p></div>`;
         idGenerateBtn.disabled = true;
         const _btnText = idGenerateBtn.textContent;
         idGenerateBtn.textContent = "Composing…";
         try {
+          const frontBlob = await croppedBlob(frontCropper);
+          const backBlob = await croppedBlob(backCropper);
+          const fd = new FormData();
+          fd.append("front", frontBlob, "front.png");
+          fd.append("back", backBlob, "back.png");
+          fd.append("layout", idLayout.value);
           const res = await fetch("/id-card-preview", { method: "POST", body: fd });
           if (!res.ok) {
             const err = await res.json().catch(() => ({}));
