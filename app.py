@@ -443,22 +443,19 @@ def compose_id_card_pdf(front_bytes, front_name, front_crop,
     MARGIN = int(0.4 * DPI)
     GAP = int(0.3 * DPI)
 
-    # Real ID-card size (ISO/IEC 7810 ID-1 / CR80): 85.6mm x 54mm.
+    # Real ID-card size (ISO/IEC 7810 ID-1 / CR80): 85.6mm x 53.98mm (~8.5x5.5cm).
     MM = DPI / 25.4
-    CARD_W = int(85.6 * MM)   # ~1011 px
-    CARD_H = int(54.0 * MM)   # ~638 px
+    CARD_W = int(85.6 * MM)   # ~1011 px @300dpi
+    CARD_H = int(54.0 * MM)   # ~638 px @300dpi
 
     canvas = Image.new("RGB", (A4_W, A4_H), "white")
 
     def fit_to_card(card):
-        """Scale the cropped image to the physical card box, preserving aspect
-        (so it fits WITHIN the real card size — never enlarged past it)."""
-        scale = min(CARD_W / card.width, CARD_H / card.height)
-        # Don't upscale beyond the real card size; only shrink if larger.
-        scale = min(scale, 1.0) if card.width <= CARD_W and card.height <= CARD_H else scale
-        w = max(1, int(card.width * scale))
-        h = max(1, int(card.height * scale))
-        return card.resize((w, h), Image.LANCZOS)
+        """Resize the cropped image to EXACTLY the physical card size
+        (85.6mm x 54mm). The user has cropped to the card boundary, so we fill
+        the real card rectangle — this guarantees the printed card is 8.5x5.5cm
+        regardless of the source photo's resolution."""
+        return card.resize((CARD_W, CARD_H), Image.LANCZOS)
 
     f_img = fit_to_card(front)
     b_img = fit_to_card(back)
