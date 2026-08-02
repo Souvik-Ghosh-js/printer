@@ -389,6 +389,69 @@ def preview_pdf():
     except Exception as e:
         return jsonify({"error": "Preview generation failed", "detail": str(e)}), 500
 
+# --- Document auto-detect (DocumentAI DocUNet model + classical CV fallback) ---
+DOCUNET_ONNX = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "weights", "docunet_mobile.onnx")
+# Below this confidence the detection is likely a full-frame fallback quad,
+# so the frontend should keep Cropper.js's own default box instead.
+DETECT_MIN_CONFIDENCE = 0.30
+
+
+def _detect_document_corners(bgr):
+    """Detect document corners with the ML model, falling back to the
+    classical OpenCV detector when the model is unavailable OR unsure.
+    Returns (corners (4,2), confidence, detector) where detector is
+    "ml" or "classical"."""
+    ml_result = None
+    if os.path.exists(DOCUNET_ONNX):
+        try:
+            from docenh.geometry.ml_corners import find_document_corners_ml
+            corners, conf = find_document_corners_ml(bgr, onnx_path=DOCUNET_ONNX)
+            if conf >= DETECT_MIN_CONFIDENCE:
+                return corners, conf, "ml"
+            ml_result = (corners, conf)
+        except Exception as e:
+            print(f"[detect_document] ML detector unavailable ({e}); "
+                  f"falling back to classical CV")
+    else:
+        print(f"[detect_document] model file missing ({DOCUNET_ONNX}); "
+              f"falling back to classical CV")
+    from docenh.geometry.corners import find_document_corners
+    corners, conf = find_document_corners(bgr)
+    # Keep whichever detector was more confident.
+    if ml_result and ml_result[1] >= conf:
+        return ml_result[0], ml_result[1], "ml"
+    return corners, conf, "classical"
+
+
+@app.route("/detect_document", methods=["POST"])
+def detect_document():
+    """Auto-detect the document/card boundary in an uploaded image.
+
+    Returns the 4 corners (TL,TR,BR,BL) in the coordinate space of the
+    uploaded image, so the frontend can pre-fill the Cropper.js box.
+    ok=false means low confidence: keep the default crop box."""
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"ok": False, "reason": "no file"}), 400
+    try:
+        arr = np.frombuffer(f.read(), np.uint8)
+        bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if bgr is None:
+            return jsonify({"ok": False, "reason": "could not decode image"}), 400
+        corners, conf, detector = _detect_document_corners(bgr)
+        print(f"[detect_document] detector={detector} confidence={conf:.2f}")
+        if conf < DETECT_MIN_CONFIDENCE:
+            return jsonify({"ok": False, "reason": "low confidence",
+                            "detector": detector, "confidence": round(float(conf), 3)})
+        return jsonify({"ok": True, "detector": detector,
+                        "confidence": round(float(conf), 3),
+                        "corners": np.asarray(corners).round(1).tolist()})
+    except Exception as e:
+        print(f"[detect_document] error: {e}")
+        return jsonify({"ok": False, "reason": str(e)}), 500
+
+
 # --- ID card compose + upload helpers ---
 def _load_as_image(file_bytes, filename):
     """Turn an uploaded file (image or PDF) into a PIL RGB image.

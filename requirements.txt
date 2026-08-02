@@ -12,4 +12,5 @@ img2pdf
 requests
 setuptools
 opencv-python
+onnxruntime
 gunicorn

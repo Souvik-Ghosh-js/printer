@@ -1269,6 +1269,33 @@ proceedPaymentBtn.addEventListener("click", async function () {
         });
       }
 
+      // Auto-detect the card boundary server-side (ML model, with classical-CV
+      // fallback on the server) and pre-fill the crop box. On any failure we
+      // keep Cropper.js's default box — the user can always adjust by hand.
+      async function autoDetectCrop(cropper, dataUrl, which) {
+        try {
+          const blob = await (await fetch(dataUrl)).blob();
+          const fd = new FormData();
+          fd.append("file", blob, "side.jpg");
+          const r = await fetch("/detect_document", { method: "POST", body: fd });
+          const d = await r.json();
+          if (d.ok && Array.isArray(d.corners)) {
+            const xs = d.corners.map(c => c[0]), ys = d.corners.map(c => c[1]);
+            const x = Math.max(0, Math.min(...xs));
+            const y = Math.max(0, Math.min(...ys));
+            cropper.setData({ x, y,
+              width: Math.max(...xs) - x, height: Math.max(...ys) - y });
+            console.log(`[ID crop ${which}] crop box from ${d.detector === "ml"
+              ? "ML model" : "classical CV fallback"} (confidence ${d.confidence})`);
+          } else {
+            console.log(`[ID crop ${which}] auto-detect skipped (${d.reason || "unknown"}`
+              + `${d.detector ? ", detector=" + d.detector : ""}) — using Cropper.js default box`);
+          }
+        } catch (err) {
+          console.log(`[ID crop ${which}] auto-detect failed — using Cropper.js default box`, err);
+        }
+      }
+
       function setupCropper(fileInput, imgEl, which) {
         const loader = document.getElementById(`id-${which}-loader`);
         const tools = document.getElementById(`id-${which}-tools`);
@@ -1296,6 +1323,7 @@ proceedPaymentBtn.addEventListener("click", async function () {
               ready() {
                 loader.style.display = "none";
                 tools.style.display = "block";
+                autoDetectCrop(cropper, dataUrl, which);
               },
             });
             if (which === "front") frontCropper = cropper; else backCropper = cropper;
